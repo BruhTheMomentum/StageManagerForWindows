@@ -9,6 +9,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Text;
+using System.Windows;
 
 namespace StageManager
 {
@@ -72,7 +73,9 @@ namespace StageManager
 
 		public async Task Start()
 		{
-			if (Thread.CurrentThread.ManagedThreadId != 1)
+			// Check if we're on the UI thread by verifying we have access to the dispatcher
+			// This is more reliable than checking for thread ID 1
+			if (System.Windows.Application.Current?.Dispatcher?.CheckAccess() == false)
 				throw new NotSupportedException("Start has to be called on the main thread, otherwise events won't be fired.");
 
 			WindowsManager.WindowCreated += WindowsManager_WindowCreated;
