@@ -3,8 +3,6 @@ name: StageManager CI
 on:
   push:
     tags: [ "v*" ]
-  schedule:
-    - cron: "0 8 * * 1" # Weekly Monday 08:00 UTC
 
 permissions:
   contents: read
@@ -44,6 +42,36 @@ jobs:
 
     - name: Publish self-contained
       run: dotnet publish StageManager/StageManager.csproj --configuration ${{ env.Configuration }} --runtime win-x64 --self-contained false --output ./publish -p:Version=${{ github.run_number }}
+
+    # ------------------------------------------------------------------
+    # Authenticode-sign the binaries (only for tag pushes)
+    # ------------------------------------------------------------------
+    - name: Re-create code-signing certificate
+      if: startsWith(github.ref, 'refs/tags/')
+      shell: pwsh
+      run: |
+        # Write the base64-encoded PFX from the GitHub secret back to disk
+        [IO.File]::WriteAllBytes('sign.pfx', [Convert]::FromBase64String("${{ secrets.SIGN_PFX_B64 }}"))
+
+    - name: Sign published binaries
+      if: startsWith(github.ref, 'refs/tags/')
+      shell: pwsh
+      run: |
+        $timestamp = "${{ secrets.SIGN_TIMESTAMP_URL }}"
+        $password  = "${{ secrets.SIGN_PFX_PASSWORD }}"
+        $files = Get-ChildItem -Path ./publish -Recurse -Include *.exe,*.dll
+        foreach ($f in $files) {
+          $args = @('/f','sign.pfx','/p',$password,'/fd','sha256')
+          if ($timestamp) { $args += @('/tr',$timestamp,'/td','sha256') }
+          & signtool.exe sign @args $f.FullName
+        }
+
+    - name: Verify signatures
+      if: startsWith(github.ref, 'refs/tags/')
+      shell: pwsh
+      run: |
+        Get-ChildItem -Path ./publish -Recurse -Include *.exe,*.dll |
+          ForEach-Object { & signtool.exe verify /pa $_.FullName }
 
     - name: Compress artifact
       shell: pwsh
