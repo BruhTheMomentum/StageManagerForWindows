@@ -144,6 +144,21 @@ namespace StageManager.Native
 		public void Stop()
 		{
 			_active = false;
+
+			// Clean up window event subscriptions to prevent memory leaks
+			foreach (var window in _windows.Values)
+			{
+				if (window != null)
+				{
+					window.WindowFocused -= null;
+					window.WindowUpdated -= null;
+					window.WindowClosed -= null;
+				}
+			}
+
+			// Clear collections to release references
+			_windows.Clear();
+			_floating.Clear();
 		}
 
 		public IWindowsDeferPosHandle DeferWindowsPos(int count)

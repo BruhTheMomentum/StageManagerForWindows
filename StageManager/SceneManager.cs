@@ -13,7 +13,7 @@ using System.Windows;
 
 namespace StageManager
 {
-	public class SceneManager
+	public class SceneManager : IDisposable
 	{
 		private readonly Desktop _desktop;
 		private List<Scene> _scenes;
@@ -38,6 +38,8 @@ namespace StageManager
 
 		private const string TeamsProcessName1 = "ms-teams.exe";
 		private const string TeamsProcessName2 = "teams.exe";
+		private bool _disposed = false;
+		private readonly bool _hideDesktopIcons;
 
 		/// <summary>
 		/// Determines whether the given window should stay visible across scenes and therefore must not
@@ -64,11 +66,15 @@ namespace StageManager
 			       title.IndexOf("compact", StringComparison.OrdinalIgnoreCase) >= 0;
 		}
 
-		public SceneManager(WindowsManager windowsManager)
+		public SceneManager(WindowsManager windowsManager, bool hideDesktopIcons = true)
 		{
 			WindowsManager = windowsManager ?? throw new ArgumentNullException(nameof(windowsManager));
 			_desktop = new Desktop();
-			_desktop.HideIcons();
+			_hideDesktopIcons = hideDesktopIcons;
+
+			// Only hide desktop icons if the setting is enabled
+			if (_hideDesktopIcons)
+				_desktop.HideIcons();
 		}
 
 		public async Task Start()
@@ -89,6 +95,16 @@ namespace StageManager
 
 		internal void Stop()
 		{
+			// Unsubscribe from all WindowsManager events to prevent memory leaks
+			if (WindowsManager != null)
+			{
+				WindowsManager.WindowCreated -= WindowsManager_WindowCreated;
+				WindowsManager.WindowUpdated -= WindowsManager_WindowUpdated;
+				WindowsManager.WindowDestroyed -= WindowsManager_WindowDestroyed;
+				WindowsManager.UntrackedFocus -= WindowsManager_UntrackedFocus;
+				WindowsManager.DesktopShortClick -= WindowsManager_DesktopShortClick;
+			}
+
 			WindowsManager.Stop();
 
 			// Determine which window should stay visible (e.g. the one that currently has focus)
@@ -120,7 +136,9 @@ namespace StageManager
 				}
 			}
 
-			_desktop.ShowIcons();
+			// Only show desktop icons if the setting is enabled
+			if (_hideDesktopIcons)
+				_desktop.ShowIcons();
 		}
 
 		private void WindowsManager_WindowUpdated(IWindow window, WindowUpdateType type)
@@ -213,6 +231,10 @@ namespace StageManager
 		private void WindowsManager_DesktopShortClick(object? sender, IntPtr handle)
 		{
 			if (_suspend)
+				return;
+
+			// Only treat desktop clicks as toggle triggers when HideDesktopIcons setting is enabled
+			if (!_hideDesktopIcons)
 				return;
 
 			// Only treat clicks on truly blank desktop areas as a toggle trigger
@@ -422,12 +444,16 @@ namespace StageManager
 				if (scene is null)
 				{
 					_lastScene = prior;
-					_desktop.ShowIcons();
+					// Only show desktop icons if the setting is enabled
+					if (_hideDesktopIcons)
+						_desktop.ShowIcons();
 				}
 				else
 				{
 					_lastScene = null;
-					_desktop.HideIcons();
+					// Only hide desktop icons if the setting is enabled
+					if (_hideDesktopIcons)
+						_desktop.HideIcons();
 				}
 			}
 			finally
@@ -535,6 +561,22 @@ namespace StageManager
 
 		public IEnumerable<IWindow> GetCurrentWindows() => _current?.Windows ?? GetSceneableWindows();
 
+		/// <summary>
+		/// Shows desktop icons immediately (used when setting is disabled)
+		/// </summary>
+		public void ShowDesktopIcons()
+		{
+			_desktop.ShowIcons();
+		}
+
+		/// <summary>
+		/// Hides desktop icons immediately (used when setting is enabled)
+		/// </summary>
+		public void HideDesktopIcons()
+		{
+			_desktop.HideIcons();
+		}
+
 		// Group windows by **process id** instead of the process name so that every
 		// newly-launched program (i.e. a new process, even if it shares the same
 		// executable name with another instance) gets its **own** scene.
@@ -542,5 +584,25 @@ namespace StageManager
 		// This fulfils the requirement that launching a new program should ALWAYS
 		// create a separate scene.
 		private string GetWindowGroupKey(IWindow window) => window.ProcessId.ToString();
+
+		public void Dispose()
+		{
+			Dispose(true);
+			GC.SuppressFinalize(this);
+		}
+
+		protected virtual void Dispose(bool disposing)
+		{
+			if (!_disposed)
+			{
+				if (disposing)
+				{
+					// Already handled by Stop() method which should be called explicitly
+					// But ensure cleanup in case Dispose is called directly
+					Stop();
+				}
+				_disposed = true;
+			}
+		}
 	}
 }

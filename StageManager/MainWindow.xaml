@@ -135,6 +135,10 @@
                         IsCheckable="True"
                         IsChecked="{Binding StartsWithWindows}" />
                     <MenuItem
+                        Header="Hide desktop icons"
+                        IsCheckable="True"
+                        IsChecked="{Binding HideDesktopIcons, Mode=TwoWay}" />
+                    <MenuItem
                         Header="Project page"
                         Click="MenuItem_ProjectPage_Click" />
                     <Separator />

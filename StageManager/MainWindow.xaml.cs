@@ -9,6 +9,7 @@ using StageManager.Native.Window;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading;
@@ -23,7 +24,7 @@ namespace StageManager
 	/// <summary>
 	/// Interaction logic for MainWindow.xaml
 	/// </summary>
-	public partial class MainWindow : Window
+	public partial class MainWindow : Window, INotifyPropertyChanged
 	{
 		private const int TIMERINTERVAL_MILLISECONDS = 500;
 		private const int MAX_SCENES = 6;
@@ -34,16 +35,41 @@ namespace StageManager
 		private double _lastWidth;
 		private Timer _overlapCheckTimer;
 		private Point _mouse = new Point(0, 0);
+		private CancellationTokenSource _cancellationTokenSource;
 		private SceneModel _removedCurrentScene;
 		private SceneModel _mouseDownScene;
+		private bool _hideDesktopIcons;
+
+		public event PropertyChangedEventHandler PropertyChanged;
 
 		public bool EnableWindowDropToScene = false;
 		public bool EnableWindowPullToScene = true;
 
+		public bool HideDesktopIcons
+		{
+			get => _hideDesktopIcons;
+			set
+			{
+				if (_hideDesktopIcons != value)
+				{
+					_hideDesktopIcons = value;
+					Settings.SetHideDesktopIcons(value);
+					RaisePropertyChanged(nameof(HideDesktopIcons));
+
+					// Apply setting change immediately
+					ApplyDesktopIconsSetting();
+				}
+			}
+		}
+
 		public MainWindow()
 		{
+			// Load initial setting BEFORE UI initialization
+			_hideDesktopIcons = Settings.GetHideDesktopIcons();
+
 			InitializeComponent();
 
+			// Set DataContext AFTER setting is loaded
 			DataContext = this;
 
 			_overlapCheckTimer = new Timer(OverlapCheck, null, 2500, TIMERINTERVAL_MILLISECONDS);
@@ -63,11 +89,26 @@ namespace StageManager
 
 		protected override void OnClosed(EventArgs e)
 		{
+			// Cancel all background operations
+			_cancellationTokenSource?.Cancel();
+			_cancellationTokenSource?.Dispose();
+
+			// Unsubscribe from SceneManager events before stopping to prevent memory leaks
+			if (SceneManager != null)
+			{
+				SceneManager.SceneChanged -= SceneManager_SceneChanged;
+				SceneManager.CurrentSceneSelectionChanged -= SceneManager_CurrentSceneSelectionChanged;
+			}
+
 			StopHook();
+
+			// Dispose the overlap check timer to stop background operations
+			_overlapCheckTimer?.Dispose();
 
 			trayIcon.Dispose();
 
-			SceneManager.Stop();
+			// Dispose SceneManager properly
+			SceneManager?.Dispose();
 
 			base.OnClosed(e);
 
@@ -81,23 +122,45 @@ namespace StageManager
 			_thisHandle = new System.Windows.Interop.WindowInteropHelper(this).Handle;
 
 			var windowsManager = new WindowsManager();
-			SceneManager = new SceneManager(windowsManager);
-			await SceneManager.Start().ConfigureAwait(true);
+			SceneManager = new SceneManager(windowsManager, HideDesktopIcons);
+			
+			// Ensure SceneManager.Start() is called on the main thread
+			if (Dispatcher.CheckAccess())
+			{
+				await SceneManager.Start();
+			}
+			else
+			{
+				await Dispatcher.InvokeAsync(async () => await SceneManager.Start());
+			}
 
 			SceneManager.SceneChanged += SceneManager_SceneChanged;
 			SceneManager.CurrentSceneSelectionChanged += SceneManager_CurrentSceneSelectionChanged;
 
 			AddInitialScenes();
 
+			// Initialize cancellation token source for background operations
+			_cancellationTokenSource = new CancellationTokenSource();
+
 			// Schedule a late initialization pass to recalculate thumbnail sizes after all window information is available.
 			_ = Task.Run(async () =>
 			{
-				await Task.Delay(2000).ConfigureAwait(false);
-				Dispatcher.Invoke(() =>
+				try
 				{
-					foreach (var scene in Scenes)
-						scene.UpdatePreviewSizes();
-				});
+					await Task.Delay(2000, _cancellationTokenSource.Token).ConfigureAwait(false);
+					if (!_cancellationTokenSource.Token.IsCancellationRequested)
+					{
+						Dispatcher.Invoke(() =>
+						{
+							foreach (var scene in Scenes)
+								scene.UpdatePreviewSizes();
+						});
+					}
+				}
+				catch (OperationCanceledException)
+				{
+					// Expected during shutdown, ignore
+				}
 			});
 
 			var foreground = Win32.GetForegroundWindow();
@@ -388,9 +451,32 @@ namespace StageManager
 		}
 
 		public static bool StartsWithWindows
-		{ 
+		{
 			get => AutoStart.IsStartup(APP_NAME);
 			set => AutoStart.SetStartup(APP_NAME, value);
+		}
+
+		private void RaisePropertyChanged([System.Runtime.CompilerServices.CallerMemberName] string memberName = "")
+		{
+			PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(memberName));
+		}
+
+		private void ApplyDesktopIconsSetting()
+		{
+			if (SceneManager != null)
+			{
+				// Apply setting immediately by showing or hiding desktop icons
+				if (_hideDesktopIcons)
+				{
+					// Hide desktop icons when setting is enabled
+					SceneManager.HideDesktopIcons();
+				}
+				else
+				{
+					// Show desktop icons when setting is disabled
+					SceneManager.ShowDesktopIcons();
+				}
+			}
 		}
 
 		private void MenuItem_ProjectPage_Click(object sender, RoutedEventArgs e)
