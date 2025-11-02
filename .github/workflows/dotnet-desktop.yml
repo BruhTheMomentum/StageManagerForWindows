@@ -24,8 +24,7 @@ jobs:
     steps:
     - name: Checkout source
       uses: actions/checkout@v4
-      with:
-        fetch-depth:0
+      with: fetch-depth:0
 
     - name: Setup .NET SDK
       uses: actions/setup-dotnet@v4
