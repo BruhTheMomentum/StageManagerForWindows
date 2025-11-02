@@ -19,7 +19,7 @@ Download and run the executable from the [Releases tab](https://github.com/awaes
  
 ### Requirements
  - Windows 10 version 1607 (Anniversary Update, build 14393) or newer
- - [.NET 9 SDK](https://dotnet.microsoft.com/en-us/download)
+ - [.NET 10 SDK](https://dotnet.microsoft.com/en-us/download)
 
 ## To do
 

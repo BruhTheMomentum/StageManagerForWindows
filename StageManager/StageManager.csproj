@@ -2,12 +2,12 @@
 
 	<PropertyGroup>
 		<OutputType>WinExe</OutputType>
-		<TargetFramework>net9.0-windows</TargetFramework>
+		<TargetFramework>net10.0-windows</TargetFramework>
 		<Nullable>enable</Nullable>
 		<UseWPF>true</UseWPF>
 		<UseWindowsForms>true</UseWindowsForms>
 		<ApplicationIcon>StageManager.ico</ApplicationIcon>
-		<Version>0.5.4</Version>
+		<Version>0.6.2</Version>
 	</PropertyGroup>
 
 	<ItemGroup>
@@ -20,6 +20,10 @@
 		<PackageReference Include="Hardcodet.NotifyIcon.Wpf" Version="2.0.1" />
 		<PackageReference Include="SharpHook" Version="6.1.2" />
 		<PackageReference Include="WpfScreenHelper" Version="2.1.1" />
+	</ItemGroup>
+
+	<ItemGroup>
+	 <Folder Include="Properties\PublishProfiles\" />
 	</ItemGroup>
 
 </Project>

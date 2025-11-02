@@ -18,30 +18,41 @@ jobs:
       contents: write            # allow release-action to create GitHub Release
 
     env:
-      Solution_Name: StageManager.sln
-      Configuration: Release
+      PROJECT_PATH: StageManager/StageManager.csproj
+      CONFIGURATION: Release
 
     steps:
     - name: Checkout source
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0
+        fetch-depth:0
 
     - name: Setup .NET SDK
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: 9.0.x
+        dotnet-version:10.0.x
         cache: true
         cache-dependency-path: '**/*.csproj'
 
     - name: Restore dependencies
-      run: dotnet restore ${{ env.Solution_Name }}
+      run: dotnet restore ${{ env.PROJECT_PATH }}
 
     - name: Build (Release)
-      run: dotnet build ${{ env.Solution_Name }} --configuration ${{ env.Configuration }} --no-restore -p:Version=${{ github.run_number }}
+      run: dotnet build ${{ env.PROJECT_PATH }} --configuration ${{ env.CONFIGURATION }} --no-restore -p:Version=${{ github.run_number }}
 
-    - name: Publish self-contained
-      run: dotnet publish StageManager/StageManager.csproj --configuration ${{ env.Configuration }} --runtime win-x64 --self-contained false --output ./publish -p:Version=${{ github.run_number }}
+    - name: Publish self-contained single-file
+      run: >
+        dotnet publish ${{ env.PROJECT_PATH }}
+        --configuration ${{ env.CONFIGURATION }}
+        --runtime win-x64
+        --self-contained true
+        -p:PublishSingleFile=true
+        -p:IncludeNativeLibrariesForSelfExtract=true
+        -p:PublishTrimmed=false
+        -p:DebugType=None
+        -p:DebugSymbols=false
+        --output ./publish
+        -p:Version=${{ github.run_number }}
 
     # ------------------------------------------------------------------
     # Release .exe 
@@ -62,6 +73,7 @@ jobs:
       uses: ncipollo/release-action@v1
       with:
         artifacts: |
+          StageManager.zip
           publish/StageManager.exe
         body: "Automated release from GitHub Actions"
         token: ${{ secrets.GITHUB_TOKEN }}
@@ -98,7 +110,7 @@ jobs:
     - name: Checkout source
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0
+        fetch-depth:0
 
     - name: Run Gitleaks
       uses: gitleaks/gitleaks-action@v2
