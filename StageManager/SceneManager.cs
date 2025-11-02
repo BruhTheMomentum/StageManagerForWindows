@@ -549,8 +549,8 @@ namespace StageManager
 			if (_scenes is null)
 			{
 				_scenes = GetSceneableWindows()
-					// Ignore windows that aren't currently visible (e.g. minimised or hidden) during initial startup.
-					.Where(w => !w.IsMinimized && Win32.IsWindowVisible(w.Handle))
+					// Include all windows during initial startup (including minimized ones) for automatic scene population
+					.Where(w => Win32.IsWindowVisible(w.Handle) || w.IsMinimized)
 					.GroupBy(GetWindowGroupKey)
 					.Select(group => new Scene(group.Key, group.ToArray()))
 					.ToList();
