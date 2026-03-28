@@ -9,9 +9,29 @@ namespace StageManager
 	/// Lightweight debug logger. Output goes to <see cref="Debug.WriteLine"/> and,
 	/// in DEBUG builds, to a log file next to the executable.
 	/// All calls are compiled away in Release builds automatically.
+	/// <see cref="Fatal"/> is the exception — it works in ALL builds and writes
+	/// to a separate crash log for post-mortem diagnosis.
 	/// </summary>
 	internal static class Log
 	{
+		/// <summary>
+		/// Logs a fatal/crash message to stagemanager-crash.log. NOT conditional —
+		/// works in both Debug and Release builds. Uses direct file I/O with no
+		/// dependency on Trace listeners or static constructor initialization.
+		/// </summary>
+		public static void Fatal(string tag, string message)
+		{
+			try
+			{
+				var path = Path.Combine(AppContext.BaseDirectory, "stagemanager-crash.log");
+				File.AppendAllText(path,
+					$"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [{tag}] {message}{Environment.NewLine}");
+			}
+			catch { }
+
+			Info(tag, message);
+		}
+
 #if DEBUG
 		private static readonly string LogPath = Path.Combine(
 			AppContext.BaseDirectory, "stagemanager.log");

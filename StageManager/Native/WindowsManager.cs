@@ -132,8 +132,15 @@ namespace StageManager.Native
 
 			var thread = new Thread(() =>
 			{
-				Win32.SetWindowsHookEx(Win32.WH_MOUSE_LL, _mouseHook, currentProcess.MainModule.BaseAddress, 0);
-				Application.Run();
+				try
+				{
+					Win32.SetWindowsHookEx(Win32.WH_MOUSE_LL, _mouseHook, currentProcess.MainModule.BaseAddress, 0);
+					Application.Run();
+				}
+				catch (Exception ex)
+				{
+					Log.Fatal("HOOK", $"Hook thread crashed: {ex}");
+				}
 			});
 
 			thread.Name = "WindowsManager";

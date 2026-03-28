@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
 
@@ -512,18 +513,18 @@ namespace StageManager
 			return false;
 		}
 
-		public async Task SwitchTo(Scene? scene)
+		public async Task<bool> SwitchTo(Scene? scene)
 		{
 			if (object.Equals(scene, _current))
 			{
 				Log.Info("SWITCH", $"Already on scene '{scene?.Title}', skipping");
-				return;
+				return false;
 			}
 
 			if (IsReentrancy(scene))
 			{
 				Log.Info("SWITCH", $"Reentrancy blocked for scene '{scene?.Title}'");
-				return;
+				return false;
 			}
 
 			Log.Info("SWITCH", $"SwitchTo START: '{_current?.Title}' → '{scene?.Title ?? "(desktop)"}'");
@@ -619,6 +620,8 @@ namespace StageManager
 
 				Log.Info("SWITCH", $"SwitchTo END: now on '{_current?.Title ?? "(desktop)"}'");
 			}
+
+			return true;
 		}
 
 		public Task MoveWindow(Scene sourceScene, IWindow window, Scene targetScene)
@@ -647,6 +650,16 @@ namespace StageManager
 
 				if (targetScene.Equals(_current))
 				{
+					if (window.IsMinimized)
+					{
+						Log.Window("MOVE", "Restoring minimized window before showing", window);
+						var hWnd = window.Handle;
+						var exStyle = Win32.GetWindowExStyleLongPtr(hWnd);
+						if (!exStyle.HasFlag(Win32.WS_EX.WS_EX_LAYERED))
+							Win32.SetWindowStyleExLongPtr(hWnd, exStyle | Win32.WS_EX.WS_EX_LAYERED);
+						Win32.SetLayeredWindowAttributes(hWnd, 0, 0, Win32.LWA_ALPHA);
+						window.ShowNormal();
+					}
 					Log.Window("MOVE", "Target is current scene, showing window", window);
 					WindowStrategy.Show(window);
 					window.Focus();
@@ -694,6 +707,48 @@ namespace StageManager
 			}
 		}
 
+		/// <summary>
+		/// Removes a window from its current scene and creates a new scene for it in the sidebar.
+		/// The window is hidden (alpha→0). Returns the new scene, or null if the operation was skipped.
+		/// </summary>
+		public Scene SeparateWindowToNewScene(IWindow window)
+		{
+			var source = FindSceneForWindow(window);
+			if (source == null || !source.Equals(_current))
+			{
+				Log.Window("DRAG", "SeparateWindow skipped: not in current scene", window);
+				return null;
+			}
+
+			if (source.Windows.Count() <= 1)
+			{
+				Log.Window("DRAG", "SeparateWindow skipped: last window in scene", window);
+				return null;
+			}
+
+			try
+			{
+				_suspend = true;
+
+				Log.Window("DRAG", $"Separating from '{source.Title}' into new scene", window);
+
+				source.Remove(window);
+				SceneChanged?.Invoke(this, new SceneChangedEventArgs(source, window, ChangeType.Updated));
+
+				var newScene = new Scene(GetWindowGroupKey(window), window);
+				_scenes.Add(newScene);
+				SceneChanged?.Invoke(this, new SceneChangedEventArgs(newScene, window, ChangeType.Created));
+
+				WindowStrategy.Hide(window);
+
+				return newScene;
+			}
+			finally
+			{
+				_suspend = false;
+			}
+		}
+
 		private IEnumerable<IWindow> GetSceneableWindows() => WindowsManager?.Windows?.Where(w => !IsPersistentWindow(w) && w.CanLayout && !string.IsNullOrEmpty(w.ProcessFileName) && !string.IsNullOrEmpty(w.Title));
 
 		public IEnumerable<Scene> GetScenes()
@@ -734,6 +789,29 @@ namespace StageManager
 			Log.Info("SWITCH", $"Pre-hiding {count} windows in '{_current.Title}' for animation");
 			foreach (var w in _current.Windows)
 				WindowStrategy.Hide(w);
+		}
+
+
+		/// <summary>
+		/// Restores minimized windows in a scene at alpha=0 so they have real screen positions
+		/// but are invisible. Prevents the Windows taskbar restore animation on first switch.
+		/// </summary>
+		public void RestoreMinimizedInvisibly(Scene scene)
+		{
+			if (scene == null) return;
+			foreach (var w in scene.Windows.Where(w => w.IsMinimized))
+			{
+				var hWnd = w.Handle;
+				// Ensure WS_EX_LAYERED so alpha takes effect
+				var exStyle = Win32.GetWindowExStyleLongPtr(hWnd);
+				if (!exStyle.HasFlag(Win32.WS_EX.WS_EX_LAYERED))
+					Win32.SetWindowStyleExLongPtr(hWnd, exStyle | Win32.WS_EX.WS_EX_LAYERED);
+				// Set alpha=0 so the restore is invisible
+				Win32.SetLayeredWindowAttributes(hWnd, 0, 0, Win32.LWA_ALPHA);
+				// Restore from minimized — now invisible
+				Log.Window("SWITCH", "Silent restore (minimized→alpha=0)", w);
+				w.ShowNormal();
+			}
 		}
 
 		/// <summary>

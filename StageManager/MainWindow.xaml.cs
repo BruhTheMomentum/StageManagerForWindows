@@ -36,12 +36,22 @@ namespace StageManager
 		private WindowMode _mode;
 		private double _lastWidth;
 		private Timer _overlapCheckTimer;
-		private Point _mouse = new Point(0, 0);
+		private long _mouseX, _mouseY;
 		private CancellationTokenSource _cancellationTokenSource;
 		private SceneModel _removedCurrentScene;
 		private SceneModel _mouseDownScene;
 		private bool _hideDesktopIcons;
+
+		// WPF-native drag state (all UI thread, no cross-thread issues)
+		private SceneModel _wpfDragScene;
+		private Point _wpfDragStartPoint;
+		private bool _wpfIsDragging;
 		private readonly SceneTransitionAnimator _sceneTransitionAnimator = new SceneTransitionAnimator();
+		private readonly SidebarDragGhost _sidebarDragGhost;
+		private readonly DebugZoneOverlay _debugZoneOverlay;
+
+		private DragDropManager _dragDropManager;
+		private readonly DragGhostWindow _dragGhostWindow = new DragGhostWindow();
 
 		public event PropertyChangedEventHandler PropertyChanged;
 
@@ -67,6 +77,9 @@ namespace StageManager
 
 		public MainWindow()
 		{
+			_sidebarDragGhost = new SidebarDragGhost(_sceneTransitionAnimator);
+			_debugZoneOverlay = new DebugZoneOverlay(_sceneTransitionAnimator);
+
 			// Load initial setting BEFORE UI initialization
 			_hideDesktopIcons = Settings.GetHideDesktopIcons();
 
@@ -81,10 +94,10 @@ namespace StageManager
 			{
 				var sceneModel = (SceneModel)model;
 
-				// Block entire command while a transition is in flight
-				if (_sceneTransitionAnimator.IsAnimating)
+				// Block entire command while a transition or drag is in flight
+				if (_sceneTransitionAnimator.IsAnimating || _sidebarDragGhost.IsActive || _wpfIsDragging || (_dragDropManager?.IsDragging ?? false))
 				{
-					Log.Info("TRANSITION", $"BLOCKED: click on '{sceneModel.Title}' while animation in progress");
+					Log.Info("TRANSITION", $"BLOCKED: click on '{sceneModel.Title}' while animation/drag in progress");
 					return;
 				}
 
@@ -97,6 +110,9 @@ namespace StageManager
 
 				var dpi = GetDpiScale();
 				Log.Action($"Scene switch: '{_removedCurrentScene?.Title ?? "(none)"}' → '{sceneModel.Title}' | scenes={Scenes.Count} dpi={dpi.X:F2},{dpi.Y:F2}");
+
+				// Silently restore any minimized incoming windows so they have real positions
+				SceneManager.RestoreMinimizedInvisibly(sceneModel.Scene);
 
 				var sidebarSlot = GetSceneThumbnailScreenBounds(sceneModel);
 				var incomingTarget = GetSceneWindowBounds(sceneModel);
@@ -116,14 +132,16 @@ namespace StageManager
 					SceneManager.HideCurrentSceneWindows();
 				}
 
-				// Collapse the clicked sidebar item so the placeholder is the only thing visible
-				Log.Info("TRANSITION", $"Collapsing sidebar item '{sceneModel.Title}'");
+				// Hide the clicked sidebar item but reserve its space so other items don't shift
+				Log.Info("TRANSITION", $"Hiding sidebar item '{sceneModel.Title}' (reserving space)");
+				sceneModel.IsHiddenButReserved = true;
 				sceneModel.IsVisible = false;
 
 				if (sidebarSlot != Rect.Empty && incomingTarget != Rect.Empty)
 				{
 					Log.Info("TRANSITION", "Starting animation");
 					await _sceneTransitionAnimator.AnimateSceneTransitionAsync(
+						GetWorkAreaBounds(),
 						sidebarSlot, incomingTarget, sceneModel,
 						outgoingSource, sidebarSlot, outgoingModel);
 					Log.Info("TRANSITION", "Animation completed");
@@ -134,8 +152,13 @@ namespace StageManager
 				}
 
 				Log.Info("TRANSITION", "Calling SwitchTo");
-				await SceneManager!.SwitchTo(sceneModel.Scene);
-				Log.Info("TRANSITION", $"SwitchTo completed, scenes={Scenes.Count}");
+				var switched = await SceneManager!.SwitchTo(sceneModel.Scene);
+				if (!switched)
+				{
+					Log.Info("TRANSITION", "SwitchTo blocked, restoring sidebar state");
+					SyncVisibilityByUpdatedTimeStamp();
+				}
+				Log.Info("TRANSITION", $"SwitchTo completed, switched={switched} scenes={Scenes.Count}");
 			});
 		}
 
@@ -160,6 +183,7 @@ namespace StageManager
 			{
 				SceneManager.SceneChanged -= SceneManager_SceneChanged;
 				SceneManager.CurrentSceneSelectionChanged -= SceneManager_CurrentSceneSelectionChanged;
+				SceneManager.WindowsManager.WindowUpdated -= OnWindowUpdatedForDrag;
 			}
 
 			StopHook();
@@ -172,8 +196,9 @@ namespace StageManager
 			// Dispose SceneManager properly
 			SceneManager?.Dispose();
 
-			// Clean up animation overlay
+			// Clean up animation overlay and drag ghost
 			_sceneTransitionAnimator?.Dispose();
+			_dragGhostWindow?.Dispose();
 
 			base.OnClosed(e);
 
@@ -204,7 +229,22 @@ namespace StageManager
 			SceneManager.SceneChanged += SceneManager_SceneChanged;
 			SceneManager.CurrentSceneSelectionChanged += SceneManager_CurrentSceneSelectionChanged;
 
+			// Wire up drag-and-drop manager
+			_dragDropManager = new DragDropManager(
+				SceneManager,
+				_dragGhostWindow,
+				() => GetDpiScale(),
+				() => _lastWidth,
+				w => WindowToLogicalRect(w),
+				w => AllScenes.Where(s => s != null).SelectMany(s => s.Windows).FirstOrDefault(wm => wm.Handle == w.Handle)?.Icon,
+				() => SyncVisibilityByUpdatedTimeStamp());
+			SceneManager.WindowsManager.WindowUpdated += OnWindowUpdatedForDrag;
+
 			AddInitialScenes();
+
+			// Pre-create the overlay window so the first animation has no HWND-creation lag
+			_sceneTransitionAnimator.WarmUp(GetWorkAreaBounds());
+			ShowDebugDragZones();
 
 			// Initialize cancellation token source for background operations
 			_cancellationTokenSource = new CancellationTokenSource();
@@ -265,6 +305,7 @@ namespace StageManager
 			{
 				var currentIndex = Scenes.IndexOf(currentModel);
 				Log.Info("SIDEBAR", $"Removing '{currentModel.Title}' at index {currentIndex}, inserting '{_removedCurrentScene?.Title ?? "(null)"}'");
+				currentModel.IsHiddenButReserved = false;
 				Scenes.RemoveAt(currentIndex);
 
 				if (_removedCurrentScene is object)
@@ -322,6 +363,19 @@ namespace StageManager
 			});
 		}
 
+		private void OnWindowUpdatedForDrag(IWindow window, WindowUpdateType type)
+		{
+			switch (type)
+			{
+				case WindowUpdateType.MoveStart:
+					Dispatcher.Invoke(() => _dragDropManager?.OnWindowMoveStart(window));
+					break;
+				case WindowUpdateType.MoveEnd:
+					Dispatcher.Invoke(() => _dragDropManager?.OnWindowMoveEnd(window));
+					break;
+			}
+		}
+
 		private void OnMousePressed(object? sender, MouseHookEventArgs e)
 		{
 			// if it's allowed to drag windows into scenes, we cannot hide the scenes
@@ -369,7 +423,8 @@ namespace StageManager
 
 			if (EnableWindowPullToScene)
 			{
-				if (e.Data.X > _lastWidth && _mouseDownScene is object)
+				// WPF drag is handled by ScenesControl_PreviewMouseLeftButtonUp — only legacy pull remains
+				if (!_wpfIsDragging && e.Data.X > _lastWidth && _mouseDownScene is object)
 				{
 					Log.Info("DRAG", $"Pulled window from scene '{_mouseDownScene.Title}' (mouseX={e.Data.X} > sidebarWidth={_lastWidth})");
 					this.Dispatcher.Invoke(() =>
@@ -407,6 +462,104 @@ namespace StageManager
 
 			return model;
 		}
+		#region WPF Sidebar Drag (Flow 2: sidebar → active)
+
+		private const double WpfDragThreshold = 10.0;
+
+		private void ScenesControl_PreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+		{
+			if (_sceneTransitionAnimator.IsAnimating || _sidebarDragGhost.IsActive) return;
+
+			// Find which SceneModel was clicked
+			var hit = e.OriginalSource as FrameworkElement;
+			SceneModel scene = null;
+			while (hit != null)
+			{
+				if (hit.DataContext is SceneModel sm) { scene = sm; break; }
+				hit = VisualTreeHelper.GetParent(hit) as FrameworkElement;
+			}
+			if (scene == null) return;
+
+			_wpfDragScene = scene;
+			_wpfDragStartPoint = e.GetPosition(this);
+			Log.Info("DRAG", $"WPF mousedown on '{scene.Title}' at ({_wpfDragStartPoint.X:F0},{_wpfDragStartPoint.Y:F0})");
+		}
+
+		private void ScenesControl_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+		{
+			if (_wpfDragScene == null) return;
+			if (e.LeftButton != System.Windows.Input.MouseButtonState.Pressed)
+			{
+				CancelWpfDrag();
+				return;
+			}
+
+			var pos = e.GetPosition(this);
+
+			if (!_wpfIsDragging)
+			{
+				var dx = pos.X - _wpfDragStartPoint.X;
+				var dy = pos.Y - _wpfDragStartPoint.Y;
+				if (Math.Sqrt(dx * dx + dy * dy) < WpfDragThreshold) return;
+
+				// Threshold exceeded — start drag
+				_wpfIsDragging = true;
+				Mouse.Capture(scenesControl, System.Windows.Input.CaptureMode.SubTree);
+				Log.Info("DRAG", $"WPF drag started from '{_wpfDragScene.Title}'");
+
+				var overlayBounds = GetWorkAreaBounds();
+				var thumbBounds = GetSceneThumbnailScreenBounds(_wpfDragScene);
+				if (thumbBounds != Rect.Empty && overlayBounds != Rect.Empty)
+					_sidebarDragGhost.Show(overlayBounds, thumbBounds, _wpfDragScene);
+				else
+					Log.Info("DRAG", $"Ghost skipped: overlay={overlayBounds == Rect.Empty} thumb={thumbBounds == Rect.Empty}");
+			}
+
+			if (_wpfIsDragging)
+			{
+				// Convert WPF-logical position to screen-logical for the overlay
+				var screenPos = PointToScreen(pos);
+				var dpi = GetDpiScale();
+				_sidebarDragGhost.UpdatePosition(screenPos.X / dpi.X, screenPos.Y / dpi.Y);
+			}
+		}
+
+		private void ScenesControl_PreviewMouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+		{
+			if (_wpfIsDragging)
+			{
+				e.Handled = true; // Suppress SwitchSceneCommand
+
+				var pos = e.GetPosition(this);
+				if (pos.X > _lastWidth && _wpfDragScene != null)
+				{
+					Log.Info("DRAG", $"WPF drop past sidebar, pulling from '{_wpfDragScene.Title}'");
+					_sidebarDragGhost.Hide();
+					SceneManager.PopWindowFrom(_wpfDragScene.Scene);
+				}
+				else
+				{
+					Log.Info("DRAG", "WPF drag cancelled (dropped in sidebar)");
+					_sidebarDragGhost.Hide();
+				}
+
+				CancelWpfDrag();
+				return;
+			}
+
+			// Not dragging — let SwitchSceneCommand fire normally
+			_wpfDragScene = null;
+		}
+
+		private void CancelWpfDrag()
+		{
+			_wpfIsDragging = false;
+			_wpfDragScene = null;
+			Mouse.Capture(null);
+		}
+
+		#endregion
+
 		private void SyncVisibilityByUpdatedTimeStamp()
 		{
 			var scenes = Scenes.OrderByDescending(s => s.Updated).ToArray();
@@ -488,8 +641,8 @@ namespace StageManager
 
 		private void _hook_MouseMoved(object? sender, MouseHookEventArgs e)
 		{
-			_mouse.X = e.Data.X;
-			_mouse.Y = e.Data.Y;
+			Interlocked.Exchange(ref _mouseX, e.Data.X);
+			Interlocked.Exchange(ref _mouseY, e.Data.Y);
 
 			if (Mode == WindowMode.OffScreen && e.Data.X <= 44)
 			{
@@ -499,6 +652,9 @@ namespace StageManager
 
 		private void OverlapCheck(object? _)
 		{
+			// Don't hide the sidebar while dragging a window toward it
+			if (_dragDropManager?.IsDragging == true) return;
+
 			var currentWindows = SceneManager.GetCurrentWindows().ToArray(); // in case the enumeration changes
 			UpdateModeByWindows(currentWindows);
 		}
@@ -509,7 +665,7 @@ namespace StageManager
 
 			var anyOverlappingWindows = windows.Any(w => doesOverlap(w.Location));
 
-			var containsMouse = _mouse.X <= _lastWidth;
+			var containsMouse = Interlocked.Read(ref _mouseX) <= _lastWidth;
 			var setMode = Mode == WindowMode.OnScreen && !containsMouse
 							|| Mode == WindowMode.OffScreen
 							|| (Mode == WindowMode.Flyover && !containsMouse);
@@ -526,6 +682,19 @@ namespace StageManager
 		/// <summary>
 		/// Gets the DPI scale factors for converting between physical and logical coordinates.
 		/// </summary>
+		[System.Diagnostics.Conditional("DEBUG")]
+		private void ShowDebugDragZones()
+		{
+			var dpi = GetDpiScale();
+			var sidebarW = _lastWidth;
+			var bufferW = DragDropManager.BufferWidthLogical;
+			var workArea = GetWorkAreaBounds();
+			_debugZoneOverlay.Show(
+				new Rect(0, 0, sidebarW, workArea.Height),
+				new Rect(sidebarW, 0, bufferW, workArea.Height),
+				workArea);
+		}
+
 		private Point GetDpiScale()
 		{
 			var source = PresentationSource.FromVisual(this);
@@ -567,67 +736,33 @@ namespace StageManager
 		}
 
 		/// <summary>
-		/// Returns the bounds of the scene's primary window in WPF logical (DPI-independent) units.
-		/// Falls back to the monitor work area if all windows are minimized.
+		/// Converts a window's Location (physical pixels) to WPF logical units.
+		/// Returns Rect.Empty if the window is minimized, offscreen-parked, or invalid.
 		/// </summary>
-		private Rect GetSceneWindowBounds(SceneModel sceneModel)
+		private Rect WindowToLogicalRect(Native.Window.IWindow window)
 		{
-			try
-			{
-				var window = sceneModel.Scene.Windows.FirstOrDefault(w => !w.IsMinimized)
-					?? sceneModel.Scene.Windows.FirstOrDefault();
+			if (window == null || window.IsMinimized)
+				return Rect.Empty;
 
-				if (window == null)
-					return GetWorkAreaBounds();
+			var loc = window.Location;
+			if (loc.Width <= 0 || loc.Height <= 0 || loc.X < -10000)
+				return Rect.Empty;
 
-				var loc = window.Location;
-				if (loc.Width <= 0 || loc.Height <= 0)
-					return GetWorkAreaBounds();
-
-				var dpi = GetDpiScale();
-
-				// Location is in physical pixels — convert to WPF logical units
-				return new Rect(
-					loc.X / dpi.X,
-					loc.Y / dpi.Y,
-					loc.Width / dpi.X,
-					loc.Height / dpi.Y);
-			}
-			catch
-			{
-				return GetWorkAreaBounds();
-			}
+			var dpi = GetDpiScale();
+			return new Rect(loc.X / dpi.X, loc.Y / dpi.Y, loc.Width / dpi.X, loc.Height / dpi.Y);
 		}
 
-		/// <summary>
-		/// Returns the bounds of the currently focused scene's primary window in WPF logical units.
-		/// </summary>
+		private Rect GetSceneWindowBounds(SceneModel sceneModel)
+		{
+			var window = sceneModel.Scene.Windows.FirstOrDefault(w => !w.IsMinimized);
+			var rect = WindowToLogicalRect(window);
+			return rect != Rect.Empty ? rect : GetWorkAreaBounds();
+		}
+
 		private Rect GetCurrentSceneWindowBounds()
 		{
-			try
-			{
-				var window = SceneManager.GetCurrentWindows().FirstOrDefault(w => !w.IsMinimized)
-					?? SceneManager.GetCurrentWindows().FirstOrDefault();
-
-				if (window == null)
-					return Rect.Empty;
-
-				var loc = window.Location;
-				if (loc.Width <= 0 || loc.Height <= 0)
-					return Rect.Empty;
-
-				var dpi = GetDpiScale();
-
-				return new Rect(
-					loc.X / dpi.X,
-					loc.Y / dpi.Y,
-					loc.Width / dpi.X,
-					loc.Height / dpi.Y);
-			}
-			catch
-			{
-				return Rect.Empty;
-			}
+			var window = SceneManager.GetCurrentWindows().FirstOrDefault(w => !w.IsMinimized);
+			return WindowToLogicalRect(window);
 		}
 
 		/// <summary>

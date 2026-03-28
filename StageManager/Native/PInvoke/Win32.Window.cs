@@ -14,6 +14,15 @@ namespace StageManager.Native.PInvoke
             public int Bottom { get; set; }
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        public struct POINT
+        {
+            public int X, Y;
+        }
+
+        [DllImport("user32.dll")]
+        public static extern bool GetCursorPos(out POINT lpPoint);
+
         public enum GW : uint
         {
             GW_OWNER = 4,
@@ -108,6 +117,10 @@ namespace StageManager.Native.PInvoke
 
         [DllImport("user32.dll", SetLastError = true)]
         public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, SetWindowPosFlags uFlags);
+
+        [DllImport("user32.dll")]
+        public static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint crKey, byte bAlpha, uint dwFlags);
+        public const uint LWA_ALPHA = 0x2;
 
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]

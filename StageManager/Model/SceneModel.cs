@@ -203,7 +203,28 @@ namespace StageManager.Model
 			PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(memberName));
 		}
 
-		public System.Windows.Visibility Visibility => IsVisible ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+		/// <summary>
+		/// When true, the item is invisible but still occupies layout space (Hidden vs Collapsed).
+		/// Used during scene-switch animation to prevent other items from shifting.
+		/// </summary>
+		public bool IsHiddenButReserved
+		{
+			get => _isHiddenButReserved;
+			set
+			{
+				if (_isHiddenButReserved != value)
+				{
+					_isHiddenButReserved = value;
+					RaisePropertyChanged(nameof(Visibility));
+				}
+			}
+		}
+		private bool _isHiddenButReserved;
+
+		public System.Windows.Visibility Visibility =>
+			IsVisible ? System.Windows.Visibility.Visible :
+			IsHiddenButReserved ? System.Windows.Visibility.Hidden :
+			System.Windows.Visibility.Collapsed;
 
 		public ObservableCollection<WindowModel> Windows { get; set; } = new ObservableCollection<WindowModel>();
 	}

@@ -3,14 +3,12 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media;
 using System.Windows.Media.Animation;
-using System.Windows.Media.Effects;
 using StageManager.Model;
 
 namespace StageManager.Animations
 {
-	internal class SceneTransitionAnimator
+	internal class SceneTransitionAnimator : IDisposable
 	{
 		private const int AnimationDurationMs = 300;
 
@@ -19,86 +17,71 @@ namespace StageManager.Animations
 
 		public bool IsAnimating => _isAnimating;
 
+		internal TransitionOverlayWindow Overlay => _overlay;
+
+		internal TransitionOverlayWindow GetOrCreateOverlay(Rect bounds)
+		{
+			EnsureOverlay(bounds);
+			return _overlay;
+		}
+
+		/// <summary>
+		/// Pre-creates the overlay window so the first animation has no HWND-creation lag.
+		/// </summary>
+		public void WarmUp(Rect bounds)
+		{
+			EnsureOverlay(bounds);
+			_overlay.Show();
+			_overlay.Hide();
+			Log.Info("ANIM", "Overlay warmed up");
+		}
+
 		/// <summary>
 		/// Animates placeholders for both the incoming and outgoing scenes simultaneously.
-		/// Incoming: sidebarSlot → incomingTarget (small→big, left→right)
-		/// Outgoing: outgoingSource → sidebarSlot (big→small, right→left)
 		/// Pass Rect.Empty for outgoingSource to skip the outgoing animation.
 		/// </summary>
 		public Task AnimateSceneTransitionAsync(
+			Rect overlayBounds,
 			Rect incomingSource, Rect incomingTarget, SceneModel incomingScene,
 			Rect outgoingSource, Rect outgoingTarget, SceneModel outgoingScene)
 		{
-			if (_isAnimating)
-			{
-				Log.Info("ANIM", "Skipped — animation already in progress");
-				return Task.CompletedTask;
-			}
-
+			if (_isAnimating) return Task.CompletedTask;
 			_isAnimating = true;
-
 			var tcs = new TaskCompletionSource<bool>();
 
 			try
 			{
-				// Overlay must cover all animation bounds
-				var overlayBounds = Rect.Union(incomingSource, incomingTarget);
-				if (outgoingSource != Rect.Empty)
-				{
-					overlayBounds = Rect.Union(overlayBounds, outgoingSource);
-					overlayBounds = Rect.Union(overlayBounds, outgoingTarget);
-				}
 				EnsureOverlay(overlayBounds);
 
 				var overlayLeft = _overlay.Left;
 				var overlayTop = _overlay.Top;
-
 				var duration = new Duration(TimeSpan.FromMilliseconds(AnimationDurationMs));
 				var easing = new PowerEase { EasingMode = EasingMode.EaseOut };
-
 				var storyboard = new Storyboard();
 
-				// --- Incoming placeholder (sidebar → window position) ---
-				var inPlaceholder = CreatePlaceholder(incomingScene);
-				var inFromLeft = incomingSource.X - overlayLeft;
-				var inFromTop = incomingSource.Y - overlayTop;
-				var inToLeft = incomingTarget.X - overlayLeft;
-				var inToTop = incomingTarget.Y - overlayTop;
+				// Track placeholders so we can remove exactly these on completion
+				Border inPlaceholder = null;
+				Border outPlaceholder = null;
 
-				Canvas.SetLeft(inPlaceholder, inFromLeft);
-				Canvas.SetTop(inPlaceholder, inFromTop);
-				inPlaceholder.Width = incomingSource.Width;
-				inPlaceholder.Height = incomingSource.Height;
+				// --- Incoming placeholder (sidebar → window position) ---
+				var inIcon = incomingScene?.Windows.FirstOrDefault()?.Icon;
+				inPlaceholder = PlaceholderFactory.Create(inIcon);
+				SetupPlaceholder(inPlaceholder, storyboard, duration, easing, overlayLeft, overlayTop,
+					incomingSource, incomingTarget);
 				_overlay.Canvas.Children.Add(inPlaceholder);
 
-				AddAnimations(storyboard, inPlaceholder, duration, easing,
-					inFromLeft, inToLeft, inFromTop, inToTop,
-					incomingSource.Width, incomingTarget.Width,
-					incomingSource.Height, incomingTarget.Height);
-
-				Log.Info("ANIM", $"Incoming: ({inFromLeft:F0},{inFromTop:F0} {incomingSource.Width:F0}x{incomingSource.Height:F0}) → ({inToLeft:F0},{inToTop:F0} {incomingTarget.Width:F0}x{incomingTarget.Height:F0})");
+				Log.Info("ANIM", $"Incoming: ({incomingSource.X - overlayLeft:F0},{incomingSource.Y - overlayTop:F0} {incomingSource.Width:F0}x{incomingSource.Height:F0}) → ({incomingTarget.X - overlayLeft:F0},{incomingTarget.Y - overlayTop:F0} {incomingTarget.Width:F0}x{incomingTarget.Height:F0})");
 
 				// --- Outgoing placeholder (window position → sidebar) ---
 				if (outgoingSource != Rect.Empty && outgoingScene != null)
 				{
-					var outPlaceholder = CreatePlaceholder(outgoingScene);
-					var outFromLeft = outgoingSource.X - overlayLeft;
-					var outFromTop = outgoingSource.Y - overlayTop;
-					var outToLeft = outgoingTarget.X - overlayLeft;
-					var outToTop = outgoingTarget.Y - overlayTop;
-
-					Canvas.SetLeft(outPlaceholder, outFromLeft);
-					Canvas.SetTop(outPlaceholder, outFromTop);
-					outPlaceholder.Width = outgoingSource.Width;
-					outPlaceholder.Height = outgoingSource.Height;
+					var outIcon = outgoingScene.Windows.FirstOrDefault()?.Icon;
+					outPlaceholder = PlaceholderFactory.Create(outIcon);
+					SetupPlaceholder(outPlaceholder, storyboard, duration, easing, overlayLeft, overlayTop,
+						outgoingSource, outgoingTarget);
 					_overlay.Canvas.Children.Add(outPlaceholder);
 
-					AddAnimations(storyboard, outPlaceholder, duration, easing,
-						outFromLeft, outToLeft, outFromTop, outToTop,
-						outgoingSource.Width, outgoingTarget.Width,
-						outgoingSource.Height, outgoingTarget.Height);
-
-					Log.Info("ANIM", $"Outgoing: ({outFromLeft:F0},{outFromTop:F0} {outgoingSource.Width:F0}x{outgoingSource.Height:F0}) → ({outToLeft:F0},{outToTop:F0} {outgoingTarget.Width:F0}x{outgoingTarget.Height:F0})");
+					Log.Info("ANIM", $"Outgoing: ({outgoingSource.X - overlayLeft:F0},{outgoingSource.Y - overlayTop:F0} {outgoingSource.Width:F0}x{outgoingSource.Height:F0}) → ({outgoingTarget.X - overlayLeft:F0},{outgoingTarget.Y - overlayTop:F0} {outgoingTarget.Width:F0}x{outgoingTarget.Height:F0})");
 				}
 
 				Log.Info("ANIM", $"Overlay: {_overlay.Left:F0},{_overlay.Top:F0} {_overlay.Width:F0}x{_overlay.Height:F0}, placeholders={_overlay.Canvas.Children.Count}");
@@ -107,8 +90,9 @@ namespace StageManager.Animations
 				storyboard.Completed += (s, e) =>
 				{
 					Log.Info("ANIM", "Storyboard completed, removing placeholders");
-					_overlay.Canvas.Children.Clear();
-					_overlay.Hide();
+					if (inPlaceholder != null) _overlay.Canvas.Children.Remove(inPlaceholder);
+					if (outPlaceholder != null) _overlay.Canvas.Children.Remove(outPlaceholder);
+					if (_overlay.Canvas.Children.Count == 0) _overlay.Hide();
 					_isAnimating = false;
 					tcs.TrySetResult(true);
 				};
@@ -129,9 +113,7 @@ namespace StageManager.Animations
 		private void EnsureOverlay(Rect bounds)
 		{
 			if (_overlay == null)
-			{
 				_overlay = new TransitionOverlayWindow();
-			}
 
 			_overlay.Left = bounds.X;
 			_overlay.Top = bounds.Y;
@@ -139,51 +121,30 @@ namespace StageManager.Animations
 			_overlay.Height = bounds.Height;
 		}
 
-		private static void AddAnimations(Storyboard storyboard, UIElement target,
-			Duration duration, IEasingFunction easing,
-			double fromLeft, double toLeft, double fromTop, double toTop,
-			double fromWidth, double toWidth, double fromHeight, double toHeight)
+		private static void SetupPlaceholder(Border placeholder, Storyboard storyboard,
+			Duration duration, IEasingFunction easing, double overlayLeft, double overlayTop,
+			Rect from, Rect to)
 		{
-			storyboard.Children.Add(MakeAnimation(fromLeft, toLeft, duration, easing, Canvas.LeftProperty, target));
-			storyboard.Children.Add(MakeAnimation(fromTop, toTop, duration, easing, Canvas.TopProperty, target));
-			storyboard.Children.Add(MakeAnimation(fromWidth, toWidth, duration, easing, FrameworkElement.WidthProperty, target));
-			storyboard.Children.Add(MakeAnimation(fromHeight, toHeight, duration, easing, FrameworkElement.HeightProperty, target));
+			var fromLeft = from.X - overlayLeft;
+			var fromTop = from.Y - overlayTop;
+			var toLeft = to.X - overlayLeft;
+			var toTop = to.Y - overlayTop;
+
+			Canvas.SetLeft(placeholder, fromLeft);
+			Canvas.SetTop(placeholder, fromTop);
+			placeholder.Width = from.Width;
+			placeholder.Height = from.Height;
+
+			storyboard.Children.Add(MakeAnimation(fromLeft, toLeft, duration, easing, Canvas.LeftProperty, placeholder));
+			storyboard.Children.Add(MakeAnimation(fromTop, toTop, duration, easing, Canvas.TopProperty, placeholder));
+			storyboard.Children.Add(MakeAnimation(from.Width, to.Width, duration, easing, FrameworkElement.WidthProperty, placeholder));
+			storyboard.Children.Add(MakeAnimation(from.Height, to.Height, duration, easing, FrameworkElement.HeightProperty, placeholder));
 		}
 
-		private static Border CreatePlaceholder(SceneModel sceneModel)
+		private static DoubleAnimation MakeAnimation(double from, double to, Duration duration,
+			IEasingFunction easing, DependencyProperty property, UIElement target)
 		{
-			var icon = sceneModel?.Windows.FirstOrDefault()?.Icon;
-
-			var iconImage = new System.Windows.Controls.Image
-			{
-				Source = icon,
-				Width = 48,
-				Height = 48,
-				HorizontalAlignment = HorizontalAlignment.Center,
-				VerticalAlignment = VerticalAlignment.Center
-			};
-
-			return new Border
-			{
-				Background = new SolidColorBrush(Color.FromArgb(220, 240, 240, 240)),
-				CornerRadius = new CornerRadius(8),
-				Child = iconImage,
-				Effect = new DropShadowEffect
-				{
-					BlurRadius = 30,
-					ShadowDepth = 4,
-					Opacity = 0.4
-				},
-				ClipToBounds = false
-			};
-		}
-
-		private static DoubleAnimation MakeAnimation(double from, double to, Duration duration, IEasingFunction easing, DependencyProperty property, UIElement target)
-		{
-			var anim = new DoubleAnimation(from, to, duration)
-			{
-				EasingFunction = easing
-			};
+			var anim = new DoubleAnimation(from, to, duration) { EasingFunction = easing };
 			Storyboard.SetTarget(anim, target);
 			Storyboard.SetTargetProperty(anim, new PropertyPath(property));
 			return anim;
