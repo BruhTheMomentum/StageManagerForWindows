@@ -11,6 +11,8 @@ namespace StageManager
 		{
 			base.OnStartup(e);
 
+			Services.ThemeManager.ApplyTheme();
+
 			// Log-only — intentionally NOT setting args.Handled so the app terminates
 			DispatcherUnhandledException += (s, args) =>
 			{

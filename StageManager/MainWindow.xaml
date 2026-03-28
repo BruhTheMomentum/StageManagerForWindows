@@ -22,7 +22,7 @@
     <Window.Resources>
         <Style
             x:Key="SceneOpacity"
-            TargetType="{x:Type StackPanel}">
+            TargetType="{x:Type Grid}">
             <Setter
                 Property="Opacity"
                 Value="0.8" />
@@ -59,7 +59,7 @@
             PreviewMouseLeftButtonUp="ScenesControl_PreviewMouseLeftButtonUp">
             <ItemsControl.ItemTemplate>
                 <DataTemplate>
-                    <StackPanel Orientation="Vertical"
+                    <Grid Margin="0,0,0,28"
                         Visibility="{Binding Visibility}"
                         Style="{StaticResource SceneOpacity}">
                         <i:Interaction.Triggers>
@@ -91,35 +91,7 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <!-- Icons -->
-                        <ItemsControl
-                            VerticalAlignment="Center"
-                            HorizontalAlignment="Center"
-                            Margin="0,4,0,24"
-                            ItemsSource="{Binding Windows}"
-                            AlternationCount="1000">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <StackPanel
-                                        Orientation="Horizontal" />
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Border>
-                                        <Border.Effect>
-                                            <DropShadowEffect
-                                                BlurRadius="20" />
-                                        </Border.Effect>
-                                        <Image
-                                            Margin="0, 0, 0, 0"
-                                            Height="30"
-                                            Source="{Binding Icon}" />
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </StackPanel>
+                    </Grid>
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>
@@ -131,21 +103,26 @@
             MenuActivation="LeftOrRightClick">
             <tb:TaskbarIcon.ContextMenu>
                 <ContextMenu
+                    Style="{StaticResource TrayContextMenuStyle}"
                     Opened="ContextMenu_Opened"
                     Closed="ContextMenu_Closed">
                     <MenuItem
+                        Style="{StaticResource TrayMenuItemStyle}"
                         Header="Start with Windows"
                         IsCheckable="True"
                         IsChecked="{Binding StartsWithWindows}" />
                     <MenuItem
+                        Style="{StaticResource TrayMenuItemStyle}"
                         Header="Hide desktop icons"
                         IsCheckable="True"
                         IsChecked="{Binding HideDesktopIcons, Mode=TwoWay}" />
                     <MenuItem
+                        Style="{StaticResource TrayMenuItemStyle}"
                         Header="Project page"
                         Click="MenuItem_ProjectPage_Click" />
-                    <Separator />
+                    <Separator Style="{StaticResource TrayMenuSeparatorStyle}" />
                     <MenuItem
+                        Style="{StaticResource TrayMenuItemStyle}"
                         Header="Quit"
                         Click="MenuItem_Quit_Click" />
                 </ContextMenu>

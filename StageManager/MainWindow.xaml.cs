@@ -52,6 +52,7 @@ namespace StageManager
 
 		private DragDropManager _dragDropManager;
 		private readonly DragGhostWindow _dragGhostWindow = new DragGhostWindow();
+		private readonly IconOverlayManager _iconOverlay = new();
 
 		public event PropertyChangedEventHandler PropertyChanged;
 
@@ -196,9 +197,10 @@ namespace StageManager
 			// Dispose SceneManager properly
 			SceneManager?.Dispose();
 
-			// Clean up animation overlay and drag ghost
+			// Clean up animation overlay, drag ghost, and icon overlay
 			_sceneTransitionAnimator?.Dispose();
 			_dragGhostWindow?.Dispose();
+			_iconOverlay?.Dispose();
 
 			base.OnClosed(e);
 
@@ -287,6 +289,8 @@ namespace StageManager
 				Scenes.Add(model);
 				Log.Info("STARTUP", $"  Scene[{i}]: '{model.Title}' visible={model.IsVisible} windows={model.Windows.Count}");
 			}
+
+			RefreshIconOverlay();
 		}
 
 		private void SceneManager_CurrentSceneSelectionChanged(object? sender, CurrentSceneSelectionChangedEventArgs args)
@@ -322,6 +326,7 @@ namespace StageManager
 			Log.Info("SIDEBAR", $"State: _removedCurrentScene='{_removedCurrentScene?.Title ?? "(null)"}' scenes={Scenes.Count} visible={Scenes.Count(s => s.IsVisible)}");
 
 			SyncVisibilityByUpdatedTimeStamp();
+			RefreshIconOverlay();
 		}
 
 		protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo)
@@ -331,6 +336,7 @@ namespace StageManager
 			this.Left = 0;
 			this.Top = 0;
 			this.Height = area.Height;
+			RefreshIconOverlay();
 		}
 
 		private void SceneManager_SceneChanged(object sender, SceneChangedEventArgs e)
@@ -360,6 +366,8 @@ namespace StageManager
 						SyncVisibilityByUpdatedTimeStamp();
 						break;
 				}
+
+				RefreshIconOverlay();
 			});
 		}
 
@@ -567,6 +575,15 @@ namespace StageManager
 				scenes[i].IsVisible = i < MAX_SCENES;
 		}
 
+		private void RefreshIconOverlay()
+		{
+			Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
+			{
+				var visible = Scenes.Where(s => s.IsVisible).ToList();
+				_iconOverlay.UpdateIcons(visible, s => GetSceneThumbnailScreenBounds(s), GetWorkAreaBounds());
+			});
+		}
+
 		public ObservableCollection<SceneModel> Scenes { get; } = new ObservableCollection<SceneModel>();
 
 		public IEnumerable<SceneModel> AllScenes => Scenes.Union(new[] { _removedCurrentScene });
@@ -603,6 +620,17 @@ namespace StageManager
 
 			var isIncoming = newLeft > Left;
 			var easingMode = isIncoming ? EasingMode.EaseOut : EasingMode.EaseIn;
+
+			if (isIncoming)
+			{
+				_iconOverlay.Enabled = true;
+				RefreshIconOverlay();
+			}
+			else
+			{
+				_iconOverlay.Enabled = false;
+				_iconOverlay.Hide();
+			}
 
 			var animation = new DoubleAnimationUsingKeyFrames();
 			animation.Duration = new Duration(TimeSpan.FromSeconds(0.5));
@@ -679,9 +707,6 @@ namespace StageManager
 			}
 		}
 
-		/// <summary>
-		/// Gets the DPI scale factors for converting between physical and logical coordinates.
-		/// </summary>
 		[System.Diagnostics.Conditional("DEBUG")]
 		private void ShowDebugDragZones()
 		{
@@ -695,6 +720,9 @@ namespace StageManager
 				workArea);
 		}
 
+		/// <summary>
+		/// Gets the DPI scale factors for converting between physical and logical coordinates.
+		/// </summary>
 		private Point GetDpiScale()
 		{
 			var source = PresentationSource.FromVisual(this);
