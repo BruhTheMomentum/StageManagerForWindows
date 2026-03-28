@@ -3,7 +3,11 @@
     "allow": [
       "Bash(dotnet run:*)",
       "Bash(ls:*)",
-      "Bash(xargs grep:*)"
+      "Bash(xargs grep:*)",
+      "Bash(ffmpeg -version)",
+      "Bash(ffprobe:*)",
+      "Bash(start:*)",
+      "Bash(ffmpeg:*)"
     ]
   }
 }

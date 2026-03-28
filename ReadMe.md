@@ -1,57 +1,35 @@
-# [WIP] Stage Manager for Windows
+# Stage Manager for Windows
 
-This is an experimental approach to bring the macOS [Stage Manager](https://support.apple.com/en-us/HT213315) to Microsoft Windows with context menu in the menubar.
+A faithful recreation of macOS [Stage Manager](https://support.apple.com/en-us/HT213315) for Windows. Forked from [awaescher/StageManager](https://github.com/awaescher/StageManager) with the goal of reaching full feature parity with macOS. Currently in beta.
 
-> **Important:** Currently WIP, being polished as you read this. 
+![Stage Manager](media/current_state.gif)
 
-![Stage Manager](media/StageManager%20Basics.gif)
-
-This prototype groups applications by their process. By switching between so called "scenes" on the left, Stage Manager hides other windows and the desktop icons, helping you to focus.
-
-Windows can be moved from one scene to another by dragging them onto scenes on the left.
+Groups windows by process into "scenes" shown on a sidebar. Switch scenes to focus on one group at a time while others are hidden. Drag windows between scenes to reorganize your workspace.
 
 ## Usage
 
-Download and run the executable from the [Releases tab](https://github.com/awaescher/StageManager/releases/) or 
- - clone this repository
- - cd into the repository directory
- - run `dotnet run --project StageManager`
- 
+Download and run the executable from the [Releases tab](https://github.com/BruhTheMomentum/StageManagerForWindows/releases/) or build from source:
+
+```bash
+git clone https://github.com/BruhTheMomentum/StageManagerForWindows.git
+cd StageManager
+dotnet run --project StageManager
+```
+
 ### Requirements
- - Windows 10 version 1607 (Anniversary Update, build 14393) or newer
+ - Windows 10 version 1607 or newer
  - [.NET 10 SDK](https://dotnet.microsoft.com/en-us/download)
 
-## To do
+## Roadmap
 
-|Topic|State|
-|-|-|
-|**Experimental stage**||
-|initial windows grouping by process|✅|
-|3D display of opened windows (static)|✅|
-|hide/show windows of given scenes|✅|
-|hide/show desktop icons|✅|
-|scene management with drag&drop|✅|
-|restore windows on quit/restart|✅|
-|auto hide & fly-in scenes for maximized windows|✅|
-|full screenshots for windows that were minimized on startup|✅|
-|drag windows from other scenes into the current one|✅|
-|place screenshots in relative size of the desktop|⬜|
-|limit maximum scenes (like 6 for macOS?)|✅|
-|limit window count per scene (like newest 5)|⬜|
-|tray icon to start & stop|✅|
-|start with Windows|✅|
-|**Product stage**||
-|virtual desktop support (pin window)|⬜|
-|multi-monitor support|⬜|
-|visual feedback when dragging windows from other scenes|⬜|
-|feature parity with macOS Stage Manager|⬜|
-|**Polishing stage**||
-|window animations|⬜|
-|live dwm thumbnails|✅|
-|adjust 3D angle according to screen position|⬜|
-|flyover sidebar in desktop view mode if icons are close to the left|⬜|
+The goal is a 1:1 match with macOS Stage Manager. Key remaining work:
 
-Contributions very welcome :heart:
+- **Behaviour alignment** — match macOS scene switching logic, window grouping rules, and edge cases
+- **Complete animations** — smooth scene transitions, sidebar fly-in/fly-out, window shuffle effects
+- **Multi-monitor support** — independent stage managers per display
+- **Visual polish** — 3D perspective thumbnails, proper sizing relative to desktop, adaptive sidebar positioning
+- **Drag & drop refinement** — visual feedback, ghost previews, snap-to-scene indicators
+- **Smarter window detection** — filter out popups and transient windows (e.g. Teams call toasts) that shouldn't create new scenes
 
 ---
 
