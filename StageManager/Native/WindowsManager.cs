@@ -224,41 +224,37 @@ namespace StageManager.Native
 				{
 					HandleWindowMoveEnd();
 
-					// Detect short click (<250 ms) and desktop in foreground
-					var clickDuration = DateTime.Now - _lastLeftButtonDown;
-					if (clickDuration.TotalMilliseconds < 250)
+					// Detect click on desktop surface using window under cursor
+					Win32.GetCursorPos(out var cursorPt);
+					var windowUnderCursor = Win32.WindowFromPoint(new System.Drawing.Point(cursorPt.X, cursorPt.Y));
+					if (windowUnderCursor != IntPtr.Zero)
 					{
-						var foreground = Win32.GetForegroundWindow();
-						if (foreground != IntPtr.Zero)
+						var buffer = new System.Text.StringBuilder(256);
+						Win32.GetClassName(windowUnderCursor, buffer, buffer.Capacity);
+						var cls = buffer.ToString();
+						if (cls == "WorkerW" || cls == "Progman" || cls == "SysListView32" || cls == "SHELLDLL_DefView")
 						{
-							// Check class name of the foreground window
-							var buffer = new System.Text.StringBuilder(256);
-							Win32.GetClassName(foreground, buffer, buffer.Capacity);
-							var cls = buffer.ToString();
-							if (cls == "WorkerW" || cls == "Progman")
+							// Schedule the desktop click after the system double-click interval.
+							// This allows us to detect and ignore double-clicks on desktop items.
+							lock (_desktopClickLock)
 							{
-								// Schedule the desktop click after the system double-click interval.
-								// This allows us to detect and ignore double-clicks on desktop items.
+								_desktopClickPending = true;
+								_desktopClickTime = DateTime.Now;
+								_desktopClickHandle = windowUnderCursor;
+							}
+
+							Task.Run(async () =>
+							{
+								await Task.Delay(_doubleClickTime);
 								lock (_desktopClickLock)
 								{
-									_desktopClickPending = true;
-									_desktopClickTime = DateTime.Now;
-									_desktopClickHandle = foreground;
-								}
-
-								Task.Run(async () =>
-								{
-									await Task.Delay(_doubleClickTime);
-									lock (_desktopClickLock)
+									if (_desktopClickPending && (DateTime.Now - _desktopClickTime).TotalMilliseconds >= _doubleClickTime)
 									{
-										if (_desktopClickPending && (DateTime.Now - _desktopClickTime).TotalMilliseconds >= _doubleClickTime)
-										{
-											DesktopShortClick?.Invoke(this, _desktopClickHandle);
-										}
-										_desktopClickPending = false;
+										DesktopShortClick?.Invoke(this, _desktopClickHandle);
 									}
-								});
-							}
+									_desktopClickPending = false;
+								}
+							});
 						}
 					}
 				}

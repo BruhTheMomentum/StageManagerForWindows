@@ -772,6 +772,8 @@ namespace StageManager
 
 		public bool IsCurrentScene(Scene scene) => object.Equals(scene, _current);
 
+		public bool IsDesktopView => _current is null;
+
 		public IEnumerable<IWindow> GetCurrentWindows() => _current?.Windows ?? GetSceneableWindows();
 
 		/// <summary>

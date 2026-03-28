@@ -170,6 +170,9 @@ namespace StageManager
 			_thisHandle = new System.Windows.Interop.WindowInteropHelper(this).Handle;
 			_lastWidth = Width;
 
+			// Start hidden — will slide in after scenes are loaded
+			Opacity = 0;
+
 			StartHook();	
 		}
 
@@ -276,6 +279,26 @@ namespace StageManager
 			var foregroundScene = SceneManager.FindSceneForWindow(foreground);
 			if (foregroundScene is object)
 				await SceneManager.SwitchTo(foregroundScene).ConfigureAwait(true);
+
+			// Position icons while sidebar is at Left=0 (correct screen coords)
+			_iconOverlay.Enabled = true;
+			RefreshIconOverlay();
+
+			// Now move off-screen and slide in
+			Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
+			{
+				var startupDuration = TimeSpan.FromSeconds(0.5);
+				var startupEasing = new PowerEase { EasingMode = EasingMode.EaseOut };
+
+				Opacity = 1;
+				Left = -Width;
+				_iconOverlay.SlideIn(-Width, startupDuration, startupEasing);
+
+				var slideIn = new DoubleAnimationUsingKeyFrames { Duration = new Duration(startupDuration) };
+				slideIn.KeyFrames.Add(new EasingDoubleKeyFrame(-Width, KeyTime.FromPercent(0)));
+				slideIn.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromPercent(1.0), startupEasing));
+				BeginAnimation(LeftProperty, slideIn);
+			});
 		}
 
 		private void AddInitialScenes()
@@ -326,6 +349,13 @@ namespace StageManager
 			Log.Info("SIDEBAR", $"State: _removedCurrentScene='{_removedCurrentScene?.Title ?? "(null)"}' scenes={Scenes.Count} visible={Scenes.Count(s => s.IsVisible)}");
 
 			SyncVisibilityByUpdatedTimeStamp();
+
+			// Hide sidebar when switching to desktop view
+			if (args.Current is null)
+			{
+				Mode = WindowMode.OffScreen;
+			}
+
 			RefreshIconOverlay();
 		}
 
@@ -575,12 +605,12 @@ namespace StageManager
 				scenes[i].IsVisible = i < MAX_SCENES;
 		}
 
-		private void RefreshIconOverlay()
+		private void RefreshIconOverlay(double xOffset = 0)
 		{
 			Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
 			{
 				var visible = Scenes.Where(s => s.IsVisible).ToList();
-				_iconOverlay.UpdateIcons(visible, s => GetSceneThumbnailScreenBounds(s), GetWorkAreaBounds());
+				_iconOverlay.UpdateIcons(visible, s => GetSceneThumbnailScreenBounds(s), GetWorkAreaBounds(), xOffset);
 			});
 		}
 
@@ -620,22 +650,29 @@ namespace StageManager
 
 			var isIncoming = newLeft > Left;
 			var easingMode = isIncoming ? EasingMode.EaseOut : EasingMode.EaseIn;
+			var duration = TimeSpan.FromSeconds(0.5);
+			var easingFunction = new PowerEase { EasingMode = easingMode };
 
 			if (isIncoming)
 			{
+				// Snap to final position, force layout, position icons at correct coords, then animate
+				BeginAnimation(LeftProperty, null);
+				Left = 0;
+				UpdateLayout();
 				_iconOverlay.Enabled = true;
-				RefreshIconOverlay();
+				var visible = Scenes.Where(s => s.IsVisible).ToList();
+				_iconOverlay.UpdateIcons(visible, s => GetSceneThumbnailScreenBounds(s), GetWorkAreaBounds());
+				_iconOverlay.SlideIn(-Width, duration, easingFunction);
+				Left = -Width;
 			}
 			else
 			{
 				_iconOverlay.Enabled = false;
-				_iconOverlay.Hide();
+				_iconOverlay.SlideOut(-Width, duration, easingFunction);
 			}
 
-			var animation = new DoubleAnimationUsingKeyFrames();
-			animation.Duration = new Duration(TimeSpan.FromSeconds(0.5));
-			var easingFunction = new PowerEase { EasingMode = easingMode };
-			animation.KeyFrames.Add(new EasingDoubleKeyFrame(Left, KeyTime.FromPercent(0)));
+			var animation = new DoubleAnimationUsingKeyFrames { Duration = new Duration(duration) };
+			animation.KeyFrames.Add(new EasingDoubleKeyFrame(-Width, KeyTime.FromPercent(0)));
 			animation.KeyFrames.Add(new EasingDoubleKeyFrame(newLeft, KeyTime.FromPercent(1.0), easingFunction));
 
 			BeginAnimation(LeftProperty, animation);
@@ -689,6 +726,10 @@ namespace StageManager
 
 		private void UpdateModeByWindows(IEnumerable<IWindow> windows)
 		{
+			// Keep sidebar hidden while in desktop view
+			if (SceneManager?.IsDesktopView == true)
+				return;
+
 			bool doesOverlap(IWindowLocation loc) => loc.State == Native.Window.WindowState.Maximized || (loc.State == Native.Window.WindowState.Normal && (loc.X * 2) < _lastWidth);
 
 			var anyOverlappingWindows = windows.Any(w => doesOverlap(w.Location));
