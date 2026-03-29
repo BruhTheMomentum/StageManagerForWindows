@@ -62,6 +62,17 @@ namespace StageManager.Native.PInvoke
             */
         }
 
+        /// <summary>
+        /// Ensures WS_EX_LAYERED is set on the window, then applies the given alpha.
+        /// </summary>
+        public static void SetAlpha(IntPtr hWnd, byte alpha)
+        {
+            var exStyle = Win32.GetWindowExStyleLongPtr(hWnd);
+            if (!exStyle.HasFlag(Win32.WS_EX.WS_EX_LAYERED))
+                Win32.SetWindowStyleExLongPtr(hWnd, exStyle | Win32.WS_EX.WS_EX_LAYERED);
+            Win32.SetLayeredWindowAttributes(hWnd, 0, alpha, Win32.LWA_ALPHA);
+        }
+
         public static void ForceForegroundWindow(IntPtr hWnd)
         {
             FocusStealer.Steal(hWnd);

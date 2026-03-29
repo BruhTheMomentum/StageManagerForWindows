@@ -35,6 +35,7 @@ namespace StageManager.Native
 		private DateTime _desktopClickTime;
 		private IntPtr _desktopClickHandle;
 		private readonly object _desktopClickLock = new object();
+		private DateTime _lastDragEnd = DateTime.MinValue;
 		/// <summary>
 		/// Raised after a completed < 250 ms left-button click when the desktop (WorkerW/Progman) is the foreground window.
 		/// The <see cref="IntPtr"/> argument is the handle of the desktop window that had focus.
@@ -234,9 +235,10 @@ namespace StageManager.Native
 						var cls = buffer.ToString();
 						if (cls == "WorkerW" || cls == "Progman" || cls == "SysListView32" || cls == "SHELLDLL_DefView")
 						{
-							// Schedule the desktop click after the system double-click interval.
-							// This allows us to detect and ignore double-clicks on desktop items.
-							lock (_desktopClickLock)
+							// Suppress false desktop clicks from drag-drop mouse-up landing on desktop behind sidebar
+							if ((DateTime.Now - _lastDragEnd).TotalMilliseconds < 300)
+							{ /* drag just ended — skip desktop click */ }
+							else lock (_desktopClickLock)
 							{
 								_desktopClickPending = true;
 								_desktopClickTime = DateTime.Now;
@@ -488,6 +490,11 @@ namespace StageManager.Native
 			window.IsMouseMoving = true;
 		}
 
+		public void SuppressNextDesktopClick()
+		{
+			_lastDragEnd = DateTime.Now;
+		}
+
 		private void HandleWindowMoveEnd()
 		{
 			if (!_active)
@@ -499,6 +506,7 @@ namespace StageManager.Native
 				{
 					var window = _mouseMoveWindow;
 					_mouseMoveWindow = null;
+					_lastDragEnd = DateTime.Now;
 
 					window.IsMouseMoving = false;
 					WindowMoved?.Invoke(window, EventArgs.Empty);

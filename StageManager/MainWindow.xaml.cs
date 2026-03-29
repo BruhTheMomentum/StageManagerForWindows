@@ -43,9 +43,17 @@ namespace StageManager
 		private bool _hideDesktopIcons;
 
 		// WPF-native drag state (all UI thread, no cross-thread issues)
+		private enum SidebarDragPhase { None, InSidebar, InBuffer, PastBuffer }
 		private SceneModel _wpfDragScene;
 		private Point _wpfDragStartPoint;
-		private bool _wpfIsDragging;
+		private SidebarDragPhase _sidebarDragPhase;
+		private bool IsSidebarDragging => _sidebarDragPhase != SidebarDragPhase.None;
+		private IWindow _sidebarDragWindow;
+		private Rect _sidebarDragThumbRect;
+		private Rect _sidebarDragWindowRect;
+		private Point _sidebarDragDpi;
+		private double _sidebarDragBufferLeft;
+		private double _sidebarDragBufferRight;
 		private readonly SceneTransitionAnimator _sceneTransitionAnimator = new SceneTransitionAnimator();
 		private readonly SidebarDragGhost _sidebarDragGhost;
 		private readonly DebugZoneOverlay _debugZoneOverlay;
@@ -96,7 +104,7 @@ namespace StageManager
 				var sceneModel = (SceneModel)model;
 
 				// Block entire command while a transition or drag is in flight
-				if (_sceneTransitionAnimator.IsAnimating || _sidebarDragGhost.IsActive || _wpfIsDragging || (_dragDropManager?.IsDragging ?? false))
+				if (_sceneTransitionAnimator.IsAnimating || _sidebarDragGhost.IsActive || IsSidebarDragging || (_dragDropManager?.IsDragging ?? false))
 				{
 					Log.Info("TRANSITION", $"BLOCKED: click on '{sceneModel.Title}' while animation/drag in progress");
 					return;
@@ -462,7 +470,7 @@ namespace StageManager
 			if (EnableWindowPullToScene)
 			{
 				// WPF drag is handled by ScenesControl_PreviewMouseLeftButtonUp — only legacy pull remains
-				if (!_wpfIsDragging && e.Data.X > _lastWidth && _mouseDownScene is object)
+				if (!IsSidebarDragging && e.Data.X > _lastWidth && _mouseDownScene is object)
 				{
 					Log.Info("DRAG", $"Pulled window from scene '{_mouseDownScene.Title}' (mouseX={e.Data.X} > sidebarWidth={_lastWidth})");
 					this.Dispatcher.Invoke(() =>
@@ -520,6 +528,8 @@ namespace StageManager
 
 			_wpfDragScene = scene;
 			_wpfDragStartPoint = e.GetPosition(this);
+			_sidebarDragPhase = SidebarDragPhase.None;
+			_sidebarDragWindow = null;
 			Log.Info("DRAG", $"WPF mousedown on '{scene.Title}' at ({_wpfDragStartPoint.X:F0},{_wpfDragStartPoint.Y:F0})");
 		}
 
@@ -534,54 +544,128 @@ namespace StageManager
 
 			var pos = e.GetPosition(this);
 
-			if (!_wpfIsDragging)
+			if (!IsSidebarDragging)
 			{
 				var dx = pos.X - _wpfDragStartPoint.X;
 				var dy = pos.Y - _wpfDragStartPoint.Y;
 				if (Math.Sqrt(dx * dx + dy * dy) < WpfDragThreshold) return;
 
-				// Threshold exceeded — start drag
-				_wpfIsDragging = true;
+				_sidebarDragPhase = SidebarDragPhase.InSidebar;
 				Mouse.Capture(scenesControl, System.Windows.Input.CaptureMode.SubTree);
 				Log.Info("DRAG", $"WPF drag started from '{_wpfDragScene.Title}'");
 
+				// Resolve the window that will be popped (same as PopWindowFrom picks)
+				_sidebarDragWindow = _wpfDragScene.Scene.Windows.LastOrDefault();
+
+				// Compute rects for interpolation
+				_sidebarDragThumbRect = GetSceneThumbnailScreenBounds(_wpfDragScene);
+				_sidebarDragWindowRect = _sidebarDragWindow != null
+					? WindowToLogicalRect(_sidebarDragWindow)
+					: Rect.Empty;
+				if (_sidebarDragWindowRect == Rect.Empty)
+					_sidebarDragWindowRect = new Rect(0, 0, 800, 600);
+
+				_sidebarDragDpi = GetDpiScale();
+				_sidebarDragBufferLeft = _lastWidth;
+				_sidebarDragBufferRight = _lastWidth + DragDropManager.BufferWidthLogical;
+
 				var overlayBounds = GetWorkAreaBounds();
-				var thumbBounds = GetSceneThumbnailScreenBounds(_wpfDragScene);
-				if (thumbBounds != Rect.Empty && overlayBounds != Rect.Empty)
-					_sidebarDragGhost.Show(overlayBounds, thumbBounds, _wpfDragScene);
+				if (_sidebarDragThumbRect != Rect.Empty && overlayBounds != Rect.Empty)
+					_sidebarDragGhost.Show(overlayBounds, _sidebarDragThumbRect, _wpfDragScene);
 				else
-					Log.Info("DRAG", $"Ghost skipped: overlay={overlayBounds == Rect.Empty} thumb={thumbBounds == Rect.Empty}");
+					Log.Info("DRAG", $"Ghost skipped: overlay={overlayBounds == Rect.Empty} thumb={_sidebarDragThumbRect == Rect.Empty}");
 			}
 
-			if (_wpfIsDragging)
+			if (!IsSidebarDragging) return;
+
+			var screenPos = PointToScreen(pos);
+			var dpi = _sidebarDragDpi;
+			double cursorLogicalX = screenPos.X / dpi.X;
+			double cursorLogicalY = screenPos.Y / dpi.Y;
+
+			var prevPhase = _sidebarDragPhase;
+
+			// Transition back from PastBuffer: hide real window, restore ghost
+			if (_sidebarDragPhase == SidebarDragPhase.PastBuffer && pos.X <= _sidebarDragBufferRight)
 			{
-				// Convert WPF-logical position to screen-logical for the overlay
-				var screenPos = PointToScreen(pos);
-				var dpi = GetDpiScale();
-				_sidebarDragGhost.UpdatePosition(screenPos.X / dpi.X, screenPos.Y / dpi.Y);
+				HideSidebarDragRealWindow();
+				_sidebarDragGhost.SetVisible(true);
+				Log.Info("DRAG", $"Phase: PastBuffer → {(pos.X <= _sidebarDragBufferLeft ? "InSidebar" : "InBuffer")}");
+			}
+
+			if (pos.X <= _sidebarDragBufferLeft)
+			{
+				_sidebarDragPhase = SidebarDragPhase.InSidebar;
+
+				_sidebarDragGhost.UpdatePositionAndSize(
+					cursorLogicalX - _sidebarDragThumbRect.Width / 2,
+					cursorLogicalY - _sidebarDragThumbRect.Height / 2,
+					_sidebarDragThumbRect.Width,
+					_sidebarDragThumbRect.Height);
+			}
+			else if (pos.X <= _sidebarDragBufferRight)
+			{
+				_sidebarDragPhase = SidebarDragPhase.InBuffer;
+
+				double t = Math.Clamp((pos.X - _sidebarDragBufferLeft) / DragDropManager.BufferWidthLogical, 0.0, 1.0);
+				double ghostW = DragDropManager.Lerp(_sidebarDragThumbRect.Width, _sidebarDragWindowRect.Width, t);
+				double ghostH = DragDropManager.Lerp(_sidebarDragThumbRect.Height, _sidebarDragWindowRect.Height, t);
+
+				_sidebarDragGhost.UpdatePositionAndSize(
+					cursorLogicalX - ghostW / 2,
+					cursorLogicalY - ghostH / 2,
+					ghostW, ghostH);
+			}
+			else
+			{
+				// --- Past buffer zone: show real window ---
+				bool entering = _sidebarDragPhase != SidebarDragPhase.PastBuffer;
+				if (entering)
+				{
+					_sidebarDragGhost.SetVisible(false);
+					_sidebarDragPhase = SidebarDragPhase.PastBuffer;
+					Log.Info("DRAG", $"Phase: {prevPhase} → PastBuffer");
+				}
+
+				// Position window at cursor (physical pixels), then show on entry
+				if (_sidebarDragWindow != null)
+				{
+					int winW = (int)(_sidebarDragWindowRect.Width * dpi.X);
+					int winH = (int)(_sidebarDragWindowRect.Height * dpi.Y);
+					int winX = (int)(screenPos.X - winW / 2.0);
+					int winY = (int)(screenPos.Y - winH / 2.0);
+					Win32.SetWindowPos(_sidebarDragWindow.Handle, IntPtr.Zero,
+						winX, winY, winW, winH,
+						Win32.SetWindowPosFlags.DoNotActivate);
+				}
+
+				if (entering)
+					ShowSidebarDragRealWindow();
 			}
 		}
 
 		private void ScenesControl_PreviewMouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
 		{
-			if (_wpfIsDragging)
+			if (IsSidebarDragging)
 			{
 				e.Handled = true; // Suppress SwitchSceneCommand
 
 				var pos = e.GetPosition(this);
-				if (pos.X > _lastWidth && _wpfDragScene != null)
+				var phase = _sidebarDragPhase;
+
+				if ((phase == SidebarDragPhase.PastBuffer || (phase == SidebarDragPhase.InBuffer && pos.X > _lastWidth))
+					&& _wpfDragScene != null)
 				{
-					Log.Info("DRAG", $"WPF drop past sidebar, pulling from '{_wpfDragScene.Title}'");
-					_sidebarDragGhost.Hide();
-					SceneManager.PopWindowFrom(_wpfDragScene.Scene);
+					Log.Info("DRAG", $"WPF drop (phase={phase}), pulling from '{_wpfDragScene.Title}'");
+					var scene = _wpfDragScene.Scene;
+					CancelWpfDrag();
+					SceneManager.PopWindowFrom(scene).SafeFireAndForget();
 				}
 				else
 				{
-					Log.Info("DRAG", "WPF drag cancelled (dropped in sidebar)");
-					_sidebarDragGhost.Hide();
+					Log.Info("DRAG", $"WPF drag cancelled (phase={phase})");
+					CancelWpfDrag();
 				}
-
-				CancelWpfDrag();
 				return;
 			}
 
@@ -591,9 +675,34 @@ namespace StageManager
 
 		private void CancelWpfDrag()
 		{
-			_wpfIsDragging = false;
+			if (_sidebarDragPhase == SidebarDragPhase.PastBuffer)
+				HideSidebarDragRealWindow();
+			_sidebarDragGhost.Hide();
+			_sidebarDragPhase = SidebarDragPhase.None;
 			_wpfDragScene = null;
+			_sidebarDragWindow = null;
 			Mouse.Capture(null);
+			SceneManager?.WindowsManager.SuppressNextDesktopClick();
+		}
+
+		private void ShowSidebarDragRealWindow()
+		{
+			if (_sidebarDragWindow == null) return;
+			if (_sidebarDragWindow.IsMinimized)
+			{
+				Win32Helper.SetAlpha(_sidebarDragWindow.Handle, 0);
+				_sidebarDragWindow.ShowNormal();
+				Log.Info("DRAG", "Sidebar drag: restored minimized window");
+			}
+			Win32Helper.SetAlpha(_sidebarDragWindow.Handle, 255);
+			Log.Info("DRAG", "Sidebar drag: real window shown (alpha→255)");
+		}
+
+		private void HideSidebarDragRealWindow()
+		{
+			if (_sidebarDragWindow == null) return;
+			Win32Helper.SetAlpha(_sidebarDragWindow.Handle, 0);
+			Log.Info("DRAG", "Sidebar drag: real window hidden (alpha→0)");
 		}
 
 		#endregion
@@ -890,20 +999,12 @@ namespace StageManager
 
 		private void ApplyDesktopIconsSetting()
 		{
-			if (SceneManager != null)
-			{
-				// Apply setting immediately by showing or hiding desktop icons
-				if (_hideDesktopIcons)
-				{
-					// Hide desktop icons when setting is enabled
-					SceneManager.HideDesktopIcons();
-				}
-				else
-				{
-					// Show desktop icons when setting is disabled
-					SceneManager.ShowDesktopIcons();
-				}
-			}
+			if (SceneManager == null) return;
+
+			if (_hideDesktopIcons)
+				SceneManager.HideDesktopIcons();
+			else
+				SceneManager.ShowDesktopIcons();
 		}
 
 		private void MenuItem_ProjectPage_Click(object sender, RoutedEventArgs e)

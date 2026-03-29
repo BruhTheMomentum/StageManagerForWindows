@@ -1,4 +1,4 @@
-﻿using Microsoft.Win32;
+using Microsoft.Win32;
 using StageManager.Native.PInvoke;
 using System;
 using System.Runtime.InteropServices;
@@ -15,7 +15,7 @@ namespace StageManager
 		static extern IntPtr SendMessage(IntPtr hWnd, UInt32 Msg, IntPtr wParam, IntPtr lParam);
 
 		[DllImport("user32.dll", SetLastError = true)]
-		public static extern IntPtr FindWindowEx(IntPtr parentHandle, IntPtr childAfter, string className, string windowTitle);
+		internal static extern IntPtr FindWindowEx(IntPtr parentHandle, IntPtr childAfter, string className, string windowTitle);
 
 		[DllImport("user32.dll", SetLastError = false)]
 		static extern IntPtr GetDesktopWindow();
@@ -33,8 +33,6 @@ namespace StageManager
 
 		public bool GetDesktopIconsVisible()
 		{
-			// pinvoke suggestions from StackOverflow are not working reliably, so we read the registry directly
-			// https://stackoverflow.com/questions/6402834/how-to-hide-desktop-icons-programmatically
 			using var key = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced", writable: false);
 			if (key?.GetValue("HideIcons", 0) is int hideIconsValue)
 				return hideIconsValue == 0;
@@ -44,20 +42,54 @@ namespace StageManager
 
 		private void ToggleDesktopIcons()
 		{
+			var shellView = GetDesktopSHELLDLL_DefView();
+			Log.Info("DESKTOP", $"ToggleDesktopIcons: SHELLDLL_DefView handle=0x{shellView:X}");
+			if (shellView == IntPtr.Zero)
+			{
+				Log.Info("DESKTOP", "ToggleDesktopIcons: SHELLDLL_DefView not found, toggle skipped");
+				return;
+			}
 			var toggleDesktopCommand = new IntPtr(0x7402);
-			SendMessage(GetDesktopSHELLDLL_DefView(), WM_COMMAND, toggleDesktopCommand, IntPtr.Zero);
+			SendMessage(shellView, WM_COMMAND, toggleDesktopCommand, IntPtr.Zero);
+		}
+
+		/// <summary>
+		/// Ensures desktop icons are toggled ON (shell-level).
+		/// Call at startup for crash recovery.
+		/// </summary>
+		public void EnsureIconsExist()
+		{
+			if (!GetDesktopIconsVisible())
+			{
+				Log.Info("DESKTOP", "EnsureIconsExist: icons were toggled off, restoring");
+				ToggleDesktopIcons();
+			}
 		}
 
 		public void ShowIcons()
 		{
 			if (!GetDesktopIconsVisible())
+			{
 				ToggleDesktopIcons();
+				Log.Info("DESKTOP", "ShowIcons: toggled on");
+			}
 		}
 
-		public void HideIcons()
+		public void HideIcons(bool animate = true)
 		{
 			if (GetDesktopIconsVisible())
+			{
 				ToggleDesktopIcons();
+				Log.Info("DESKTOP", "HideIcons: toggled off");
+			}
+		}
+
+		/// <summary>
+		/// Restore icons visibility. Call on app shutdown.
+		/// </summary>
+		public void RestoreIcons()
+		{
+			ShowIcons();
 		}
 
 		static IntPtr GetDesktopSHELLDLL_DefView()
@@ -68,17 +100,14 @@ namespace StageManager
 			var hProgman = FindWindow("Progman", "Program Manager");
 			var hDesktopWnd = GetDesktopWindow();
 
-			// If the main Program Manager window is found
 			if (hProgman != IntPtr.Zero)
 			{
-				// Get and load the main List view window containing the icons.
 				hShellViewWin = FindWindowEx(hProgman, IntPtr.Zero, "SHELLDLL_DefView", null);
 
 				if (hShellViewWin == IntPtr.Zero)
 				{
-					// When this fails (picture rotation is turned ON, toggledesktop shell cmd used ), then look for the WorkerW windows list to get the
-					// correct desktop list handle.
-					// As there can be multiple WorkerW windows, iterate through all to get the correct one
+					// Fallback: when Progman doesn't host DefView (e.g. wallpaper rotation, toggledesktop),
+					// scan WorkerW windows instead
 					do
 					{
 						hWorkerW = FindWindowEx(hDesktopWnd, hWorkerW, "WorkerW", null);
@@ -90,7 +119,5 @@ namespace StageManager
 		}
 
 		public bool HasDesktopView => _desktopViewHandle != IntPtr.Zero;
-
-		public IntPtr DesktopViewHandle => _desktopViewHandle;
 	}
 }

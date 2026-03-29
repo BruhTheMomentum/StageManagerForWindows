@@ -51,13 +51,21 @@ namespace StageManager.Animations
 			}
 		}
 
-		public void UpdatePosition(double screenX, double screenY)
+		public void UpdatePositionAndSize(double screenX, double screenY, double width, double height)
 		{
 			if (_ghost == null) return;
 			var overlay = _animator.Overlay;
 			if (overlay == null) return;
 			Canvas.SetLeft(_ghost, screenX - overlay.Left);
 			Canvas.SetTop(_ghost, screenY - overlay.Top);
+			_ghost.Width = Math.Max(1, width);
+			_ghost.Height = Math.Max(1, height);
+		}
+
+		public void SetVisible(bool visible)
+		{
+			if (_ghost == null) return;
+			_ghost.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
 		}
 
 		public void Hide()

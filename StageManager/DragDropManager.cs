@@ -234,21 +234,13 @@ namespace StageManager
 
 		private void HideRealWindow(IWindow window)
 		{
-			var hWnd = window.Handle;
-			var exStyle = Win32.GetWindowExStyleLongPtr(hWnd);
-			if (!exStyle.HasFlag(Win32.WS_EX.WS_EX_LAYERED))
-				Win32.SetWindowStyleExLongPtr(hWnd, exStyle | Win32.WS_EX.WS_EX_LAYERED);
-			Win32.SetLayeredWindowAttributes(hWnd, 0, 0, Win32.LWA_ALPHA);
+			Win32Helper.SetAlpha(window.Handle, 0);
 			Log.Window("DRAG", "Hidden (alpha→0)", window);
 		}
 
 		private void RestoreRealWindow(IWindow window)
 		{
-			var hWnd = window.Handle;
-			var exStyle = Win32.GetWindowExStyleLongPtr(hWnd);
-			if (!exStyle.HasFlag(Win32.WS_EX.WS_EX_LAYERED))
-				Win32.SetWindowStyleExLongPtr(hWnd, exStyle | Win32.WS_EX.WS_EX_LAYERED);
-			Win32.SetLayeredWindowAttributes(hWnd, 0, 255, Win32.LWA_ALPHA);
+			Win32Helper.SetAlpha(window.Handle, 255);
 			Log.Window("DRAG", "Restored (alpha→255)", window);
 		}
 
@@ -269,6 +261,6 @@ namespace StageManager
 			_trackedWindow = null;
 		}
 
-		private static double Lerp(double a, double b, double t) => a + (b - a) * t;
+		internal static double Lerp(double a, double b, double t) => a + (b - a) * t;
 	}
 }

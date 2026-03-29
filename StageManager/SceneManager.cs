@@ -71,9 +71,14 @@ namespace StageManager
 			_desktop = new Desktop();
 			_hideDesktopIcons = hideDesktopIcons;
 
-			// Only hide desktop icons if the setting is enabled
+			// Ensure icons exist (shell-level) so the SysListView32 is available for alpha fading.
+			// If previous session crashed, icons may have been toggled off — restore them.
+			_desktop.EnsureIconsExist();
+
 			if (_hideDesktopIcons)
-				_desktop.HideIcons();
+				_desktop.HideIcons(animate: false);
+
+			Log.Info("STARTUP", $"SceneManager constructor: hideDesktopIcons={_hideDesktopIcons}");
 		}
 
 		public async Task Start()
@@ -139,9 +144,9 @@ namespace StageManager
 				}
 			}
 
-			// Only show desktop icons if the setting is enabled
+			// Restore icon visibility and remove layered style on shutdown
 			if (_hideDesktopIcons)
-				_desktop.ShowIcons();
+				_desktop.RestoreIcons();
 		}
 
 		private void WindowsManager_WindowUpdated(IWindow window, WindowUpdateType type)
@@ -275,10 +280,6 @@ namespace StageManager
 		private void WindowsManager_DesktopShortClick(object? sender, IntPtr handle)
 		{
 			if (_suspend)
-				return;
-
-			// Only treat desktop clicks as toggle triggers when HideDesktopIcons setting is enabled
-			if (!_hideDesktopIcons)
 				return;
 
 			// Only treat clicks on truly blank desktop areas as a toggle trigger
@@ -538,10 +539,11 @@ namespace StageManager
 				// Determine the window that currently has the keyboard focus (foreground).
 				var foregroundHandle = Win32.GetForegroundWindow();
 
-				// Hide every window that does NOT belong to the target scene **and** is not the foreground window.
+				// When switching to a scene, skip the foreground window (it gets focus handling separately).
+				// When switching to desktop (scene=null), hide ALL windows including the foreground.
 				var otherWindows = GetSceneableWindows()
 					.Except(scene?.Windows ?? Array.Empty<IWindow>())
-					.Where(w => w.Handle != foregroundHandle)
+					.Where(w => scene is null || w.Handle != foregroundHandle)
 					.ToArray();
 
 				var prior = _current;
@@ -592,7 +594,6 @@ namespace StageManager
 				if (scene is null)
 				{
 					_lastScene = prior;
-					// Only show desktop icons if the setting is enabled
 					if (_hideDesktopIcons)
 					{
 						Log.Info("DESKTOP", "Showing desktop icons (switched to desktop view)");
@@ -602,7 +603,6 @@ namespace StageManager
 				else
 				{
 					_lastScene = null;
-					// Only hide desktop icons if the setting is enabled
 					if (_hideDesktopIcons)
 					{
 						Log.Info("DESKTOP", "Hiding desktop icons (switched to scene)");
@@ -653,11 +653,7 @@ namespace StageManager
 					if (window.IsMinimized)
 					{
 						Log.Window("MOVE", "Restoring minimized window before showing", window);
-						var hWnd = window.Handle;
-						var exStyle = Win32.GetWindowExStyleLongPtr(hWnd);
-						if (!exStyle.HasFlag(Win32.WS_EX.WS_EX_LAYERED))
-							Win32.SetWindowStyleExLongPtr(hWnd, exStyle | Win32.WS_EX.WS_EX_LAYERED);
-						Win32.SetLayeredWindowAttributes(hWnd, 0, 0, Win32.LWA_ALPHA);
+						Win32Helper.SetAlpha(window.Handle, 0);
 						window.ShowNormal();
 					}
 					Log.Window("MOVE", "Target is current scene, showing window", window);
@@ -803,14 +799,7 @@ namespace StageManager
 			if (scene == null) return;
 			foreach (var w in scene.Windows.Where(w => w.IsMinimized))
 			{
-				var hWnd = w.Handle;
-				// Ensure WS_EX_LAYERED so alpha takes effect
-				var exStyle = Win32.GetWindowExStyleLongPtr(hWnd);
-				if (!exStyle.HasFlag(Win32.WS_EX.WS_EX_LAYERED))
-					Win32.SetWindowStyleExLongPtr(hWnd, exStyle | Win32.WS_EX.WS_EX_LAYERED);
-				// Set alpha=0 so the restore is invisible
-				Win32.SetLayeredWindowAttributes(hWnd, 0, 0, Win32.LWA_ALPHA);
-				// Restore from minimized — now invisible
+				Win32Helper.SetAlpha(w.Handle, 0);
 				Log.Window("SWITCH", "Silent restore (minimized→alpha=0)", w);
 				w.ShowNormal();
 			}
