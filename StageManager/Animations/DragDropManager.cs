@@ -8,7 +8,7 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Threading;
 
-namespace StageManager
+namespace StageManager.Animations
 {
 	/// <summary>
 	/// Manages the "active window → sidebar" drag flow with a buffer zone shrink effect.

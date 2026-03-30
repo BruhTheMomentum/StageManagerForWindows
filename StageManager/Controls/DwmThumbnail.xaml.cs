@@ -4,7 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 
-namespace StageManager
+namespace StageManager.Controls
 {
 	/// <summary>
 	/// Interaction logic for DwmThumbnail.xaml

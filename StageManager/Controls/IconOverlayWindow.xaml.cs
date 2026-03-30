@@ -4,7 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Interop;
 using StageManager.Native.PInvoke;
 
-namespace StageManager
+namespace StageManager.Controls
 {
     public partial class IconOverlayWindow : Window
     {

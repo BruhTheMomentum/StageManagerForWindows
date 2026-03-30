@@ -1,7 +1,7 @@
 ﻿using StageManager.Native.Window;
 using System;
 
-namespace StageManager
+namespace StageManager.Model
 {
     public class SceneChangedEventArgs : EventArgs
 	{

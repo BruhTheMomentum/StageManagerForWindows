@@ -7,7 +7,7 @@ using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
 using StageManager.Model;
 
-namespace StageManager
+namespace StageManager.Controls
 {
     internal sealed class IconOverlayManager : IDisposable
     {

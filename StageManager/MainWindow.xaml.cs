@@ -2,8 +2,10 @@
 using Microsoft.Xaml.Behaviors.Core;
 using SharpHook;
 using StageManager.Animations;
+using StageManager.Controls;
 using StageManager.Model;
 using StageManager.Native;
+using StageManager.Services;
 using StageManager.Native.PInvoke;
 using StageManager.Native.Interop;
 using StageManager.Native.Window;

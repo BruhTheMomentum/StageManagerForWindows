@@ -1,3 +1,4 @@
+using StageManager.Model;
 using System;
 using System.Diagnostics;
 using System.IO;

@@ -4,7 +4,7 @@ using System;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace StageManager
+namespace StageManager.Services
 {
 	internal class Desktop
 	{

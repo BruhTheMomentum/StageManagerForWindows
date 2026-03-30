@@ -2,7 +2,7 @@
 using System.Reflection;
 using Microsoft.Win32;
 
-namespace StageManager
+namespace StageManager.Services
 {
 	public static class AutoStart
 	{

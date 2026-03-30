@@ -1,7 +1,9 @@
 ﻿using AsyncAwaitBestPractices;
+using StageManager.Model;
 using StageManager.Native;
 using StageManager.Native.PInvoke;
 using StageManager.Native.Window;
+using StageManager.Services;
 using StageManager.Strategies;
 using System;
 using System.Collections.Generic;

@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace StageManager
+namespace StageManager.Model
 {
 	public class CurrentSceneSelectionChangedEventArgs : EventArgs
 	{

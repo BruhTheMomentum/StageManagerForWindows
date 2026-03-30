@@ -34,13 +34,7 @@ jobs:
         cache: true
         cache-dependency-path: '**/*.csproj'
 
-    - name: Restore dependencies
-      run: dotnet restore ${{ env.PROJECT_PATH }}
-
-    - name: Build (Release)
-      run: dotnet build ${{ env.PROJECT_PATH }} --configuration ${{ env.CONFIGURATION }} --no-restore -p:Version=${{ github.run_number }}
-
-    - name: Publish self-contained single-file
+    - name: Publish x64
       run: >
         dotnet publish ${{ env.PROJECT_PATH }}
         --configuration ${{ env.CONFIGURATION }}
@@ -51,30 +45,52 @@ jobs:
         -p:PublishTrimmed=false
         -p:DebugType=None
         -p:DebugSymbols=false
-        --output ./publish
+        --output ./publish-x64
+        -p:Version=${{ github.run_number }}
+
+    - name: Publish ARM64
+      run: >
+        dotnet publish ${{ env.PROJECT_PATH }}
+        --configuration ${{ env.CONFIGURATION }}
+        --runtime win-arm64
+        --self-contained true
+        -p:PublishSingleFile=true
+        -p:IncludeNativeLibrariesForSelfExtract=true
+        -p:PublishTrimmed=false
+        -p:DebugType=None
+        -p:DebugSymbols=false
+        --output ./publish-arm64
         -p:Version=${{ github.run_number }}
 
     # ------------------------------------------------------------------
-    # Release .exe 
+    # Release .exe (x64 + ARM64)
     # ------------------------------------------------------------------
 
-    - name: Compress artifact
+    - name: Rename artifacts
       shell: pwsh
-      run: Compress-Archive -Path ./publish/* -DestinationPath StageManager.zip
+      run: |
+        Rename-Item ./publish-x64/StageManager.exe StageManager-x64.exe
+        Rename-Item ./publish-arm64/StageManager.exe StageManager-arm64.exe
 
-    - name: Upload artifact
+    - name: Upload x64 artifact
       uses: actions/upload-artifact@v4
       with:
-        name: StageManager
-        path: StageManager.zip
+        name: StageManager-x64
+        path: publish-x64/StageManager-x64.exe
+
+    - name: Upload ARM64 artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: StageManager-arm64
+        path: publish-arm64/StageManager-arm64.exe
 
     - name: Create GitHub Release (tag push)
       if: startsWith(github.ref, 'refs/tags/')
       uses: ncipollo/release-action@v1
       with:
         artifacts: |
-          StageManager.zip
-          publish/StageManager.exe
+          publish-x64/StageManager-x64.exe
+          publish-arm64/StageManager-arm64.exe
         body: "Automated release from GitHub Actions"
         token: ${{ secrets.GITHUB_TOKEN }}
 

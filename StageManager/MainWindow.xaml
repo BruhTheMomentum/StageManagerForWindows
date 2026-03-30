@@ -5,6 +5,7 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:local="clr-namespace:StageManager"
+    xmlns:controls="clr-namespace:StageManager.Controls"
     xmlns:conv="clr-namespace:StageManager.Converters"
     xmlns:i="http://schemas.microsoft.com/xaml/behaviors"
     xmlns:tb="http://www.hardcodet.net/taskbar"
@@ -82,7 +83,7 @@
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
-                                    <local:DwmThumbnail
+                                    <controls:DwmThumbnail
                                         PreviewHandle="{Binding Handle}"
                                         Width="{Binding PreviewWidth}"
                                         Height="{Binding PreviewHeight}"

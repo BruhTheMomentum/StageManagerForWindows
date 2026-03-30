@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 
-namespace StageManager
+namespace StageManager.Model
 {
     [System.Diagnostics.DebuggerDisplay("{Title}")]
 	public class Scene
