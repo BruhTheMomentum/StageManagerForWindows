@@ -19,6 +19,13 @@ namespace StageManager.Native
 		public event IWindowDelegate WindowUpdated;
 		public event IWindowDelegate WindowFocused;
 
+		public void ClearEvents()
+		{
+			WindowClosed = null;
+			WindowUpdated = null;
+			WindowFocused = null;
+		}
+
 		private int _processId;
 		private string _processName;
 		private string _processFileName;

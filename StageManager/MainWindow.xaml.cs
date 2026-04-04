@@ -219,8 +219,6 @@ namespace StageManager
 			_iconOverlay?.Dispose();
 
 			base.OnClosed(e);
-
-			Environment.Exit(0);
 		}
 
 		protected override async void OnContentRendered(EventArgs e)

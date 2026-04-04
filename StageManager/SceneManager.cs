@@ -20,6 +20,7 @@ namespace StageManager
 	{
 		private readonly Desktop _desktop;
 		private List<Scene> _scenes;
+		private readonly object _scenesLock = new object();
 		private Scene _current;
 		private bool _suspend = false;
 		private Scene _lastScene; // remembers the scene that was active before desktop view
@@ -135,7 +136,10 @@ namespace StageManager
 			}
 
 			// Original per-scene clean-up kept for completeness (will be mostly redundant)
-			foreach (var scene in _scenes)
+			Scene[] scenesSnapshot;
+			lock (_scenesLock)
+				scenesSnapshot = _scenes?.ToArray() ?? Array.Empty<Scene>();
+			foreach (var scene in scenesSnapshot)
 			{
 				foreach (var w in scene.Windows)
 				{
@@ -202,12 +206,9 @@ namespace StageManager
 				}
 				else
 				{
-					// Retain previous behavior for non-active scenes
-					if (!ShouldSkipTransparencyForWindow(window))
-					{
-						// Remove transparency / mouse-through by restoring original styles
-						WindowStrategy.Show(window);
-					}
+					// Restore normal interactivity for non-active scenes;
+					// WindowStrategy.Show handles its own skip-checks internally.
+					WindowStrategy.Show(window);
 				}
 
 				// Only switch scenes if this is actually a focus change, not just a show event
@@ -322,6 +323,8 @@ namespace StageManager
 		{
 			Log.Window("EVENT", "WindowDestroyed", window);
 
+			OpacityWindowStrategy.CleanupWindow(window.Handle);
+
 			var scene = FindSceneForWindow(window);
 
 			if (scene is not null)
@@ -352,7 +355,8 @@ namespace StageManager
 				else
 				{
 					Log.Scene("Scene empty, removing", scene);
-					_scenes.Remove(scene);
+					lock (_scenesLock)
+						_scenes.Remove(scene);
 					SceneChanged?.Invoke(this, new SceneChangedEventArgs(scene, window, ChangeType.Removed));
 
 					// If current scene became empty, switch to the first available scene after a short delay.
@@ -361,7 +365,9 @@ namespace StageManager
 						Task.Run(async () =>
 						{
 							await Task.Delay(200);
-							var fallback = _scenes.FirstOrDefault(s => s.Windows.Any());
+							Scene fallback;
+							lock (_scenesLock)
+								fallback = _scenes.FirstOrDefault(s => s.Windows.Any());
 							await SwitchTo(fallback).ConfigureAwait(false);
 						});
 					}
@@ -371,9 +377,17 @@ namespace StageManager
 
 		public Scene FindSceneForWindow(IWindow window) => FindSceneForWindow(window.Handle);
 
-		public Scene FindSceneForWindow(IntPtr handle) => _scenes?.FirstOrDefault(s => s.Windows.Any(w => w.Handle == handle));
+		public Scene FindSceneForWindow(IntPtr handle)
+		{
+			lock (_scenesLock)
+				return _scenes?.FirstOrDefault(s => s.Windows.Any(w => w.Handle == handle));
+		}
 
-		private Scene FindSceneForProcess(string processName) => _scenes.FirstOrDefault(s => string.Equals(s.Key, processName, StringComparison.OrdinalIgnoreCase));
+		private Scene FindSceneForProcess(string processName)
+		{
+			lock (_scenesLock)
+				return _scenes?.FirstOrDefault(s => string.Equals(s.Key, processName, StringComparison.OrdinalIgnoreCase));
+		}
 
 		private async void WindowsManager_WindowCreated(IWindow window, bool firstCreate)
 		{
@@ -401,7 +415,8 @@ namespace StageManager
 			if (scene is null)
 			{
 				scene = new Scene(GetWindowGroupKey(window), window);
-				_scenes.Add(scene);
+				lock (_scenesLock)
+					_scenes.Add(scene);
 				Log.Scene("Created new scene for window", scene, window);
 				SceneChanged?.Invoke(this, new SceneChangedEventArgs(scene, window, ChangeType.Created));
 			}
@@ -440,7 +455,8 @@ namespace StageManager
 
 			if (existentScene is null)
 			{
-				_scenes.Add(scene);
+				lock (_scenesLock)
+					_scenes.Add(scene);
 				Log.Scene("New window → new scene created", scene, window);
 				SceneChanged?.Invoke(this, new SceneChangedEventArgs(scene, window, ChangeType.Created));
 			}
@@ -479,28 +495,6 @@ namespace StageManager
 			return false;
 		}
 
-		/// <summary>
-		/// Helper to determine if a window should skip transparency operations
-		/// This mirrors the logic in OpacityWindowStrategy to avoid calling across classes
-		/// </summary>
-		private bool ShouldSkipTransparencyForWindow(IWindow window)
-		{
-			// Skip transparency for minimized windows - let Windows handle them natively
-			if (window.IsMinimized)
-				return true;
-
-			// Skip transparency for windows that aren't visible (already hidden/destroyed)
-			if (!Win32.IsWindowVisible(window.Handle))
-				return true;
-
-			// Skip transparency if extended style is not accessible
-			if (StageManager.Native.PInvoke.Win32.GetWindowLong(window.Handle, StageManager.Strategies.OpacityWindowStrategy.GWL_EXSTYLE) ==0)
-				return true;
-
-			// Otherwise, transparency can be applied
-			return false;
-		}
-
 		public async Task<bool> SwitchTo(Scene? scene)
 		{
 			if (object.Equals(scene, _current))
@@ -530,7 +524,10 @@ namespace StageManager
 				var prior = _current;
 				_current = scene;
 
-				foreach (var s in _scenes)
+				Scene[] scenesSnapshot;
+				lock (_scenesLock)
+					scenesSnapshot = _scenes.ToArray();
+				foreach (var s in scenesSnapshot)
 				{
 					s.IsSelected = s.Equals(scene);
 				}
@@ -625,7 +622,8 @@ namespace StageManager
 				if (!sourceScene.Windows.Any())
 				{
 					Log.Scene("Source scene empty after move, removing", sourceScene);
-					_scenes.Remove(sourceScene);
+					lock (_scenesLock)
+						_scenes.Remove(sourceScene);
 					SceneChanged?.Invoke(this, new SceneChangedEventArgs(sourceScene, window, ChangeType.Removed));
 				}
 
@@ -713,7 +711,8 @@ namespace StageManager
 				SceneChanged?.Invoke(this, new SceneChangedEventArgs(source, window, ChangeType.Updated));
 
 				var newScene = new Scene(GetWindowGroupKey(window), window);
-				_scenes.Add(newScene);
+				lock (_scenesLock)
+					_scenes.Add(newScene);
 				SceneChanged?.Invoke(this, new SceneChangedEventArgs(newScene, window, ChangeType.Created));
 
 				WindowStrategy.Hide(window);
@@ -730,21 +729,24 @@ namespace StageManager
 
 		public IEnumerable<Scene> GetScenes()
 		{
-			if (_scenes is null)
+			lock (_scenesLock)
 			{
-				_scenes = GetSceneableWindows()
-					// Include all windows during initial startup (including minimized ones) for automatic scene population
-					.Where(w => Win32.IsWindowVisible(w.Handle) || w.IsMinimized)
-					.GroupBy(GetWindowGroupKey)
-					.Select(group => new Scene(group.Key, group.ToArray()))
-					.ToList();
+				if (_scenes is null)
+				{
+					_scenes = GetSceneableWindows()
+						// Include all windows during initial startup (including minimized ones) for automatic scene population
+						.Where(w => Win32.IsWindowVisible(w.Handle) || w.IsMinimized)
+						.GroupBy(GetWindowGroupKey)
+						.Select(group => new Scene(group.Key, group.ToArray()))
+						.ToList();
 
-				Log.Info("STARTUP", $"Initial scenes: {_scenes.Count}");
-				foreach (var scene in _scenes)
-					Log.Scene("Initial scene", scene);
+					Log.Info("STARTUP", $"Initial scenes: {_scenes.Count}");
+					foreach (var scene in _scenes)
+						Log.Scene("Initial scene", scene);
+				}
+
+				return _scenes.ToList();
 			}
-
-			return _scenes;
 		}
 
 		public bool IsCurrentScene(Scene scene) => object.Equals(scene, _current);

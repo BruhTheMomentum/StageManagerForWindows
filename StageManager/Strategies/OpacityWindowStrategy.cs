@@ -35,22 +35,23 @@ namespace StageManager.Strategies
 		private static readonly System.Collections.Concurrent.ConcurrentDictionary<IntPtr, System.Threading.SemaphoreSlim> _windowLocks = new();
 		private static readonly object _globalLock = new object();
 
-		private const int AnimationDurationMs = 200; // total duration for fade animation
-		private const int AnimationSteps = 20;      // number of alpha steps – higher = smoother
-
-		// Window state validation
-		private static bool IsWindowValidForTransparency(IntPtr hWnd)
+		/// <summary>
+		/// Cleans up all per-window state (locks, saved styles, saved positions) when a window is destroyed.
+		/// </summary>
+		public static void CleanupWindow(IntPtr hWnd)
 		{
-			// Note: IsWindow is not available in Win32 class, so we'll use IsWindowVisible as the primary check
-			return StageManager.Native.PInvoke.Win32.IsWindowVisible(hWnd) &&    // Window is visible (not already hidden)
-			       !StageManager.Native.PInvoke.Win32.IsIconic(hWnd) &&          // Window is not minimized
-			       GetWindowLong(hWnd, GWL_EXSTYLE) != 0;                     // Extended style accessible
-		}
-
-		// Cleanup mechanism for destroyed windows
-		private static void CleanupWindowLock(IntPtr hWnd)
-		{
-			_windowLocks.TryRemove(hWnd, out _);
+			if (_windowLocks.TryRemove(hWnd, out var sem))
+			{
+				// Acquire before disposing to avoid ObjectDisposedException
+				// in Show/Hide if they're mid-operation on this handle.
+				sem.Wait();
+				sem.Dispose();
+			}
+			lock (_globalLock)
+			{
+				_originalStyles.Remove(hWnd);
+				_originalPositions.Remove(hWnd);
+			}
 		}
 
 		// Helper to determine when to skip transparency for a window
@@ -70,34 +71,6 @@ namespace StageManager.Strategies
 
 			// Otherwise, transparency can be applied
 			return false;
-		}
-
-		// Helper to run fade animation without blocking the UI thread
-		private static void FadeWindow(IntPtr hWnd, byte fromAlpha, byte toAlpha)
-		{
-			// Ensure window stays layered so alpha changes take effect
-			if ((GetWindowLong(hWnd, GWL_EXSTYLE) & WS_EX_LAYERED) == 0)
-			{
-				SetWindowLong(hWnd, GWL_EXSTYLE, GetWindowLong(hWnd, GWL_EXSTYLE) | WS_EX_LAYERED);
-			}
-
-			int step = (toAlpha - fromAlpha) / AnimationSteps;
-			if (step == 0) step = toAlpha > fromAlpha ? 1 : -1;
-			int delay = AnimationDurationMs / AnimationSteps;
-
-			System.Threading.Tasks.Task.Run(() =>
-			{
-				byte alpha = fromAlpha;
-				for (int i = 0; i < AnimationSteps; i++)
-				{
-					SetLayeredWindowAttributes(hWnd, 0, (byte)alpha, LWA_ALPHA);
-					alpha = (byte)(alpha + step);
-					System.Threading.Thread.Sleep(delay);
-				}
-
-				// Ensure final alpha value is set precisely
-				SetLayeredWindowAttributes(hWnd, 0, toAlpha, LWA_ALPHA);
-			});
 		}
 
 		public void Show(IWindow window)

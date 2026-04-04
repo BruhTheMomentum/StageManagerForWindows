@@ -31,6 +31,6 @@ The goal is a 1:1 match with macOS Stage Manager. Key remaining work:
 - **Drag & drop refinement** — visual feedback, ghost previews, snap-to-scene indicators
 - **Smarter window detection** — filter out popups and transient windows (e.g. Teams call toasts) that shouldn't create new scenes
 
----
+## Acknowledgements
 
-Stage Manager is using a few code files to handle window tracking from [workspacer](https://github.com/workspacer/workspacer), an amazing open source project by [Rick Button](https://github.com/rickbutton).
+Built on [awaescher/StageManager](https://github.com/awaescher/StageManager). Window tracking code from [workspacer](https://github.com/workspacer/workspacer) by [Rick Button](https://github.com/rickbutton).

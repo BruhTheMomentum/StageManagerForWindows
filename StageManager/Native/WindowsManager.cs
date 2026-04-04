@@ -17,7 +17,7 @@ namespace StageManager.Native
 
 	public class WindowsManager : IWindowsManager
 	{
-		private bool _active;
+		private volatile bool _active;
 		private IDictionary<IntPtr, WindowsWindow> _windows;
 		private WinEventDelegate _hookDelegate;
 
@@ -100,8 +100,7 @@ namespace StageManager.Native
 			_floating = new Dictionary<WindowsWindow, bool>();
 			_hookDelegate = new WinEventDelegate(WindowHook);
 
-			// Cache system double-click time for later use
-			_doubleClickTime = (int)100;
+			_doubleClickTime = (int)Win32.GetDoubleClickTime();
 		}
 
 		public Task Start()
@@ -145,6 +144,7 @@ namespace StageManager.Native
 			});
 
 			thread.Name = "WindowsManager";
+			thread.IsBackground = true;
 			thread.Start();
 
 			Log.Info("STARTUP", $"WindowsManager started, tracking {_windows.Count} windows");
@@ -154,16 +154,12 @@ namespace StageManager.Native
 		public void Stop()
 		{
 			_active = false;
+			Application.Exit();
 
 			// Clean up window event subscriptions to prevent memory leaks
 			foreach (var window in _windows.Values)
 			{
-				if (window != null)
-				{
-					window.WindowFocused -= null;
-					window.WindowUpdated -= null;
-					window.WindowClosed -= null;
-				}
+				window?.ClearEvents();
 			}
 
 			// Clear collections to release references
