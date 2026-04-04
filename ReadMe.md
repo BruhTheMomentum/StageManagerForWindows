@@ -1,6 +1,6 @@
 # Stage Manager for Windows
 
-A faithful recreation of macOS [Stage Manager](https://support.apple.com/en-us/HT213315) for Windows. Forked from [awaescher/StageManager](https://github.com/awaescher/StageManager) with the goal of reaching full feature parity with macOS. Currently in beta.
+A faithful recreation of macOS [Stage Manager](https://support.apple.com/en-us/HT213315) for Windows, built on [awaescher/StageManager](https://github.com/awaescher/StageManager). The goal is full feature parity with macOS. Currently in beta.
 
 ![Stage Manager](media/current_state.gif)
 
