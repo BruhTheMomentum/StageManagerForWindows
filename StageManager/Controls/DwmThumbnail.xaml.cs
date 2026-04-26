@@ -15,11 +15,15 @@ namespace StageManager.Controls
 		{
 			InitializeComponent();
 			LayoutUpdated += DwmThumbnail_LayoutUpdated;
+			Loaded += (_, _) => CompositionTarget.Rendering += OnRenderingTick;
+			Unloaded += (_, _) => CompositionTarget.Rendering -= OnRenderingTick;
 		}
 
 		private IntPtr _dwmThumbnail;
 		private Window _window;
 		private Point? _dpiScaleFactor;
+		private RECT _lastRect;
+		private bool _hasLastRect;
 
 		public static readonly DependencyProperty PreviewHandleProperty = DependencyProperty.Register(nameof(PreviewHandle),
 			   typeof(IntPtr),
@@ -95,27 +99,49 @@ namespace StageManager.Controls
 			if (_dwmThumbnail == IntPtr.Zero)
 				return;
 
-			var dpi = GetDpiScaleFactor();
+			ApplyRect(ComputeDestinationRect());
+		}
 
+		private void OnRenderingTick(object? sender, EventArgs e)
+		{
+			if (_dwmThumbnail == IntPtr.Zero || !IsVisible)
+				return;
+
+			var rect = ComputeDestinationRect();
+			if (_hasLastRect && rect.top == _lastRect.top && rect.left == _lastRect.left
+				&& rect.bottom == _lastRect.bottom && rect.right == _lastRect.right)
+				return;
+
+			ApplyRect(rect);
+		}
+
+		private RECT ComputeDestinationRect()
+		{
+			var dpi = GetDpiScaleFactor();
 			var previewBounds = BoundsRelativeTo(this, FindWindow());
 
-			var thumbnailRect = new RECT
+			return new RECT
 			{
 				top = (int)(previewBounds.Top * dpi.Y),
 				left = (int)(previewBounds.Left * dpi.X),
 				bottom = (int)((previewBounds.Bottom - Margin.Top - Margin.Bottom) * dpi.Y) + 1,
 				right = (int)((previewBounds.Right - Margin.Left - Margin.Right) * dpi.X) + 1
 			};
+		}
 
+		private void ApplyRect(RECT rect)
+		{
 			var props = new DWM_THUMBNAIL_PROPERTIES
 			{
 				fVisible = true,
 				dwFlags = (int)(DWM_TNP.DWM_TNP_VISIBLE | DWM_TNP.DWM_TNP_OPACITY | DWM_TNP.DWM_TNP_RECTDESTINATION | DWM_TNP.DWM_TNP_SOURCECLIENTAREAONLY),
 				opacity = 255,
-				rcDestination = thumbnailRect,
+				rcDestination = rect,
 				fSourceClientAreaOnly = true
 			};
 			NativeMethods.DwmUpdateThumbnailProperties(_dwmThumbnail, ref props);
+			_lastRect = rect;
+			_hasLastRect = true;
 		}
 	}
 }
