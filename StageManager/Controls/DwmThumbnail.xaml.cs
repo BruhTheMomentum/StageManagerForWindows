@@ -65,10 +65,20 @@ namespace StageManager.Controls
 				UpdateThumbnailProperties();
 			}
 
-			if (nameof(IsVisible).Equals(e.Property.Name) && !(bool)e.NewValue && _dwmThumbnail != IntPtr.Zero)
+			if (nameof(IsVisible).Equals(e.Property.Name))
 			{
-				NativeMethods.DwmUnregisterThumbnail(_dwmThumbnail);
-				_dwmThumbnail = IntPtr.Zero;
+				var nowVisible = (bool)e.NewValue;
+				if (!nowVisible && _dwmThumbnail != IntPtr.Zero)
+				{
+					NativeMethods.DwmUnregisterThumbnail(_dwmThumbnail);
+					_dwmThumbnail = IntPtr.Zero;
+					_hasLastRect = false;
+				}
+				else if (nowVisible && _dwmThumbnail == IntPtr.Zero && PreviewHandle != IntPtr.Zero)
+				{
+					StartCapture();
+					UpdateThumbnailProperties();
+				}
 			}
 		}
 
