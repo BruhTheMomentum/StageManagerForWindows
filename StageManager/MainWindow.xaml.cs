@@ -966,6 +966,9 @@ namespace StageManager
 		{
 			Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
 			{
+				// Force any pending sidebar layout (Remove+Insert during scene-selection change
+				// invalidates layout asynchronously) before sampling thumbnail bounds.
+				UpdateLayout();
 				var visible = Scenes.Where(s => s.IsVisible).ToList();
 				_iconOverlay.UpdateIcons(visible, s => GetSceneThumbnailScreenBounds(s), GetWorkAreaBounds(), xOffset);
 			});

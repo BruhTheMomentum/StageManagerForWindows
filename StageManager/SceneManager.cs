@@ -414,11 +414,27 @@ namespace StageManager
 			var scene = FindSceneForWindow(window);
 			if (scene is null)
 			{
-				scene = new Scene(GetWindowGroupKey(window), window);
-				lock (_scenesLock)
-					_scenes.Add(scene);
-				Log.Scene("Created new scene for window", scene, window);
-				SceneChanged?.Invoke(this, new SceneChangedEventArgs(scene, window, ChangeType.Created));
+				// Window not yet bound to any scene. Before creating a new one, check whether
+				// a scene already exists for this process (race: focus event can fire before
+				// SwitchToSceneByNewWindow has bound the window). If so, adopt the window into
+				// the existing scene to prevent duplicate scenes for the same app.
+				var key = GetWindowGroupKey(window);
+				var byKey = FindSceneForProcess(key);
+				if (byKey is not null)
+				{
+					byKey.Add(window);
+					scene = byKey;
+					Log.Scene("Adopted window into existing scene by process key", scene, window);
+					SceneChanged?.Invoke(this, new SceneChangedEventArgs(scene, window, ChangeType.Updated));
+				}
+				else
+				{
+					scene = new Scene(key, window);
+					lock (_scenesLock)
+						_scenes.Add(scene);
+					Log.Scene("Created new scene for window", scene, window);
+					SceneChanged?.Invoke(this, new SceneChangedEventArgs(scene, window, ChangeType.Created));
+				}
 			}
 			else
 			{
