@@ -24,6 +24,7 @@ namespace StageManager.Native
 		private WindowsWindow _mouseMoveWindow;
 		private readonly object _mouseMoveLock = new object();
 		private Win32.HookProc _mouseHook;
+		private readonly HashSet<IntPtr> _startupMinimizedHandles = new();
 
 		private Dictionary<WindowsWindow, bool> _floating;
 		private IntPtr _currentProcessWindowHandle;
@@ -112,6 +113,18 @@ namespace StageManager.Native
 			_currentProcessId = currentProcess.Id;
 			_currentProcessWindowHandle = currentProcess.MainWindowHandle;
 
+			// Enumerate + un-cloak startup-minimized windows BEFORE registering hooks so the
+			// forced SW_SHOWNOACTIVATE doesn't echo EVENT_SYSTEM_MINIMIZEEND back into our pipeline.
+			Win32.EnumWindows((handle, param) =>
+			{
+				if (Win32Helper.IsAppWindow(handle))
+				{
+					UncloakStartupMinimized(handle);
+					RegisterWindow(handle, false);
+				}
+				return true;
+			}, IntPtr.Zero);
+
 			Win32.SetWinEventHook(Win32.EVENT_CONSTANTS.EVENT_OBJECT_DESTROY, Win32.EVENT_CONSTANTS.EVENT_OBJECT_SHOW, IntPtr.Zero, _hookDelegate, 0, 0, 0);
 			Win32.SetWinEventHook(Win32.EVENT_CONSTANTS.EVENT_OBJECT_CLOAKED, Win32.EVENT_CONSTANTS.EVENT_OBJECT_UNCLOAKED, IntPtr.Zero, _hookDelegate, 0, 0, 0);
 			Win32.SetWinEventHook(Win32.EVENT_CONSTANTS.EVENT_SYSTEM_MINIMIZESTART, Win32.EVENT_CONSTANTS.EVENT_SYSTEM_MINIMIZEEND, IntPtr.Zero, _hookDelegate, 0, 0, 0);
@@ -120,15 +133,6 @@ namespace StageManager.Native
 			Win32.SetWinEventHook(Win32.EVENT_CONSTANTS.EVENT_OBJECT_LOCATIONCHANGE, Win32.EVENT_CONSTANTS.EVENT_OBJECT_LOCATIONCHANGE, IntPtr.Zero, _hookDelegate, 0, 0, 0);
 
 			_mouseHook = MouseHook;
-
-			Win32.EnumWindows((handle, param) =>
-			{
-				if (Win32Helper.IsAppWindow(handle))
-				{
-					RegisterWindow(handle, false);
-				}
-				return true;
-			}, IntPtr.Zero);
 
 			var thread = new Thread(() =>
 			{
@@ -156,6 +160,21 @@ namespace StageManager.Native
 			_active = false;
 			Application.Exit();
 
+			// Restore startup-minimized windows to their original minimized state so the user
+			// doesn't find them stuck cloaked at alpha=0 after the app exits.
+			foreach (var hwnd in _startupMinimizedHandles)
+			{
+				try
+				{
+					var ex = Win32.GetWindowExStyleLongPtr(hwnd);
+					Win32.SetWindowStyleExLongPtr(hwnd, ex & ~Win32.WS_EX.WS_EX_TRANSPARENT);
+					Win32Helper.SetAlpha(hwnd, 255);
+					Win32.ShowWindow(hwnd, Win32.SW.SW_SHOWMINNOACTIVE);
+				}
+				catch { /* best-effort during shutdown */ }
+			}
+			_startupMinimizedHandles.Clear();
+
 			// Clean up window event subscriptions to prevent memory leaks
 			foreach (var window in _windows.Values)
 			{
@@ -165,6 +184,31 @@ namespace StageManager.Native
 			// Clear collections to release references
 			_windows.Clear();
 			_floating.Clear();
+		}
+
+		private void UncloakStartupMinimized(IntPtr hwnd)
+		{
+			if (!Win32.IsIconic(hwnd))
+				return;
+
+			try
+			{
+				// Cloak BEFORE the show call so the window emerges already invisible — no flash,
+				// no focus steal, no z-order disruption.
+				Win32Helper.SetAlpha(hwnd, 0);
+				var ex = Win32.GetWindowExStyleLongPtr(hwnd);
+				Win32.SetWindowStyleExLongPtr(hwnd, ex | Win32.WS_EX.WS_EX_TRANSPARENT);
+
+				// Restore without activation. DWM now composites the window so its thumbnail goes live.
+				Win32.ShowWindow(hwnd, Win32.SW.SW_SHOWNOACTIVATE);
+
+				_startupMinimizedHandles.Add(hwnd);
+				Log.Info("STARTUP", $"Uncloaked minimized window 0x{hwnd.ToInt64():X} for live preview");
+			}
+			catch (Exception ex)
+			{
+				Log.Fatal("STARTUP", $"Failed to uncloak minimized window 0x{hwnd.ToInt64():X}: {ex.Message}");
+			}
 		}
 
 		public IWindowsDeferPosHandle DeferWindowsPos(int count)
