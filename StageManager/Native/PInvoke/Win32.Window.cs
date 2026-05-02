@@ -28,13 +28,6 @@ namespace StageManager.Native.PInvoke
             GW_OWNER = 4,
         }
 
-        public enum GA : uint
-        {
-            GA_PARENT = 1,
-            GA_ROOT = 2,
-            GA_ROOTOWNER = 3
-        }
-
         public static long CHILDID_SELF = 0;
         public enum OBJID { OBJID_WINDOW = 0 }
 
@@ -133,12 +126,6 @@ namespace StageManager.Native.PInvoke
         [DllImport("user32.dll")]
         public static extern IntPtr GetWindow(IntPtr hWnd, GW uCmd);
 
-        [DllImport("user32.dll")]
-        public static extern IntPtr GetAncestor(IntPtr hWnd, GA gaFlags);
-
-        [DllImport("user32.dll")]
-        public static extern IntPtr GetLastActivePopup(IntPtr hWnd);
-
         [DllImport("User32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
 		public static extern bool ShowWindow(IntPtr hWnd, SW nCmdShow);
@@ -221,10 +208,6 @@ namespace StageManager.Native.PInvoke
             DWMWA_LAST
         }
 
-        public static readonly uint LSFW_LOCK = 1;
-        public static readonly uint LSFW_UNLOCK = 2;
-        public static readonly int ASFW_ANY = -1;
-
         [DllImport("user32.dll")]
 		public static extern IntPtr GetForegroundWindow();
 
@@ -234,32 +217,6 @@ namespace StageManager.Native.PInvoke
 
         [DllImport("user32.dll")]
         public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-
-        [DllImport("user32.dll")]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool AllowSetForegroundWindow(int processId);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool LockSetForegroundWindow(uint uLockCode);
-
-		// ---------------------------
-		// TITLE BAR INFORMATION
-		// ---------------------------
-		public const uint STATE_SYSTEM_INVISIBLE = 0x00008000;
-
-		[StructLayout(LayoutKind.Sequential)]
-		public struct TITLEBARINFO
-		{
-			public uint cbSize;
-			public Rect rcTitleBar;
-			[MarshalAs(UnmanagedType.ByValArray, SizeConst = 6)]
-			public uint[] rgstate;
-		}
-
-		[DllImport("user32.dll")]
-		[return: MarshalAs(UnmanagedType.Bool)]
-		public static extern bool GetTitleBarInfo(IntPtr hwnd, ref TITLEBARINFO pti);
 
         [DllImport("user32.dll", SetLastError = true)]
         public static extern bool BringWindowToTop(IntPtr hWnd);

@@ -100,7 +100,6 @@ namespace StageManager
 			WindowsManager.WindowCreated += WindowsManager_WindowCreated;
 			WindowsManager.WindowUpdated += WindowsManager_WindowUpdated;
 			WindowsManager.WindowDestroyed += WindowsManager_WindowDestroyed;
-			WindowsManager.UntrackedFocus += WindowsManager_UntrackedFocus;
 			WindowsManager.DesktopShortClick += WindowsManager_DesktopShortClick;
 
 			await WindowsManager.Start();
@@ -116,7 +115,6 @@ namespace StageManager
 				WindowsManager.WindowCreated -= WindowsManager_WindowCreated;
 				WindowsManager.WindowUpdated -= WindowsManager_WindowUpdated;
 				WindowsManager.WindowDestroyed -= WindowsManager_WindowDestroyed;
-				WindowsManager.UntrackedFocus -= WindowsManager_UntrackedFocus;
 				WindowsManager.DesktopShortClick -= WindowsManager_DesktopShortClick;
 			}
 
@@ -132,25 +130,6 @@ namespace StageManager
 				if (w.Handle != exemptHandle)
 				{
 					w.ShowMinimized();
-				}
-			}
-
-			// Original per-scene clean-up kept for completeness (will be mostly redundant)
-			Scene[] scenesSnapshot;
-			lock (_scenesLock)
-				scenesSnapshot = _scenes?.ToArray() ?? Array.Empty<Scene>();
-			foreach (var scene in scenesSnapshot)
-			{
-				foreach (var w in scene.Windows)
-				{
-					// Restore full opacity so windows become visible again
-					WindowStrategy.Show(w);
-
-					// Minimise every window except the one that should remain visible
-					if (w.Handle != exemptHandle)
-					{
-						w.ShowMinimized();
-					}
 				}
 			}
 
@@ -269,19 +248,6 @@ namespace StageManager
 			}
 
 			return false;
-		}
-
-		private void WindowsManager_UntrackedFocus(object? sender, IntPtr e)
-		{
-			// Let dedicated mouse-click handler manage desktop toggling.
-			if (IsBlankDesktopClick(e))
-				return;
-
-			// Potentially remember desktop view handle for future use
-			if (!_desktop.HasDesktopView)
-				_desktop.TrySetDesktopView(e);
-
-			// No scene switching here – handled by DesktopShortClick or other logic.
 		}
 
 		// MainWindow assigns this so SceneManager can ignore desktop-toggle clicks while the

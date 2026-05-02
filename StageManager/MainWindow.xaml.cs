@@ -39,7 +39,7 @@ namespace StageManager
 		private WindowMode _mode;
 		private double _lastWidth;
 		private Timer _overlapCheckTimer;
-		private long _mouseX, _mouseY;
+		private long _mouseX;
 		private CancellationTokenSource _cancellationTokenSource;
 		private SceneModel _removedCurrentScene;
 		private SceneModel _mouseDownScene;
@@ -88,7 +88,6 @@ namespace StageManager
 
 		public event PropertyChangedEventHandler PropertyChanged;
 
-		public bool EnableWindowDropToScene = false;
 		public bool EnableWindowPullToScene = true;
 
 		public bool HideDesktopIcons
@@ -290,8 +289,6 @@ namespace StageManager
 			base.OnContentRendered(e);
 
 			Log.Info("STARTUP", "MainWindow content rendered, initializing...");
-
-			_thisHandle = new System.Windows.Interop.WindowInteropHelper(this).Handle;
 
 			var windowsManager = new WindowsManager();
 			SceneManager = new SceneManager(windowsManager, HideDesktopIcons);
@@ -528,10 +525,6 @@ namespace StageManager
 				});
 			}
 
-			// if it's allowed to drag windows into scenes, we cannot hide the scenes
-			if (EnableWindowDropToScene)
-				_overlapCheckTimer.Change(TimeSpan.Zero, TimeSpan.Zero);
-
 			var foregroundWindow = Win32.GetForegroundWindow();
 			if (foregroundWindow != _thisHandle)
 				return;
@@ -548,29 +541,6 @@ namespace StageManager
 
 		private void OnMouseReleased(object? sender, MouseHookEventArgs e)
 		{
-			// if it's allowed to drag windows into scenes, we cannot hide the scenes
-			if (EnableWindowDropToScene)
-			{
-				_overlapCheckTimer.Change(0, TIMERINTERVAL_MILLISECONDS);
-
-				var foregroundWindow = Win32.GetForegroundWindow();
-
-				if (foregroundWindow == _thisHandle)
-					return;
-
-				var screenPoint = new Point(e.Data.X, e.Data.Y);
-				this.Dispatcher.Invoke(() =>
-				{
-					var sceneModel = FindSceneByPoint(screenPoint);
-
-					if (sceneModel is object)
-					{
-						Log.Info("DRAG", $"Dropped window onto scene '{sceneModel.Title}'");
-						SceneManager.MoveWindow(foregroundWindow, sceneModel.Scene).SafeFireAndForget();
-					}
-				});
-			}
-
 			if (EnableWindowPullToScene)
 			{
 				// WPF drag is handled by ScenesControl_PreviewMouseLeftButtonUp — only legacy pull remains
@@ -1148,7 +1118,6 @@ namespace StageManager
 		private void _hook_MouseMoved(object? sender, MouseHookEventArgs e)
 		{
 			Interlocked.Exchange(ref _mouseX, e.Data.X);
-			Interlocked.Exchange(ref _mouseY, e.Data.Y);
 
 			if (Mode == WindowMode.OffScreen && e.Data.X <= 44)
 			{

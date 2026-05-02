@@ -26,7 +26,6 @@ namespace StageManager.Native
 		private Win32.HookProc _mouseHook;
 		private readonly HashSet<IntPtr> _startupMinimizedHandles = new();
 
-		private Dictionary<WindowsWindow, bool> _floating;
 		private IntPtr _currentProcessWindowHandle;
 		private int _currentProcessId;
 		private DateTime _lastLeftButtonDown;
@@ -73,32 +72,11 @@ namespace StageManager.Native
 		/// </summary>
 		public event WindowUpdateDelegate WindowUpdated;
 
-		public event EventHandler<IntPtr> UntrackedFocus;
-
-		/// <summary>
-		/// Notifies when a window focuses itself
-		/// </summary>
-		public event WindowFocusDelegate WindowFocused;
-
-		public event EventHandler WindowMoved;
-
-		/// <summary>
-		/// Notifies when a window updated itself
-		/// This is used to externally notify when an update was applied to a window
-		/// </summary>
-		public event WindowDelegate ExternalWindowUpdate;
-		/// <summary>
-		/// Notifies when a window closes itself
-		/// This is used to externally notify when a window was closed
-		/// </summary>
-		public event WindowDelegate ExternalWindowClosed;
-
 		public IEnumerable<IWindow> Windows => _windows.Values;
 
 		public WindowsManager()
 		{
 			_windows = new Dictionary<IntPtr, WindowsWindow>();
-			_floating = new Dictionary<WindowsWindow, bool>();
 			_hookDelegate = new WinEventDelegate(WindowHook);
 
 			_doubleClickTime = (int)Win32.GetDoubleClickTime();
@@ -183,7 +161,6 @@ namespace StageManager.Native
 
 			// Clear collections to release references
 			_windows.Clear();
-			_floating.Clear();
 		}
 
 		private void UncloakStartupMinimized(IntPtr hwnd)
@@ -215,30 +192,6 @@ namespace StageManager.Native
 		{
 			var info = Win32.BeginDeferWindowPos(count);
 			return new WindowsDeferPosHandle(info);
-		}
-
-		public void ToggleFocusedWindowTiling()
-		{
-			if (!_active)
-				return;
-
-			var window = _windows.Values.FirstOrDefault(w => w.IsFocused);
-
-			if (window != null)
-			{
-				if (_floating.ContainsKey(window))
-				{
-					_floating.Remove(window);
-					HandleWindowAdd(window, false);
-				}
-				else
-				{
-					_floating[window] = true;
-					HandleWindowRemove(window);
-					window.BringToTop();
-				}
-				window.Focus();
-			}
 		}
 
 		private IntPtr MouseHook(int nCode, UIntPtr wParam, IntPtr lParam)
@@ -386,10 +339,6 @@ namespace StageManager.Native
 
 				if (candidate)
 				{
-					window.WindowFocused += (sender) => HandleWindowFocused(sender);
-					window.WindowUpdated += (sender) => HandleWindowUpdated(sender);
-					window.WindowClosed += (sender) => HandleWindowClosed(sender);
-
 					_windows[handle] = window;
 					Log.Window("TRACK", "Registered", window);
 
@@ -446,10 +395,6 @@ namespace StageManager.Native
 				var window = _windows[handle];
 				WindowUpdated?.Invoke(window, type);
 			}
-			else
-			{
-				UntrackedFocus?.Invoke(this, handle);
-			}
 		}
 
 		private void StartWindowMove(IntPtr handle)
@@ -494,30 +439,6 @@ namespace StageManager.Native
 			}
 		}
 
-		private void HandleWindowFocused(IWindow window)
-		{
-			if (!_active)
-				return;
-
-			WindowFocused?.Invoke(window);
-		}
-
-		private void HandleWindowUpdated(IWindow window)
-		{
-			if (!_active)
-				return;
-
-			ExternalWindowUpdate?.Invoke(window);
-		}
-
-		private void HandleWindowClosed(IWindow window)
-		{
-			if (!_active)
-				return;
-
-			ExternalWindowClosed?.Invoke(window);
-		}
-
 		private void HandleWindowMoveStart(WindowsWindow window)
 		{
 			if (!_active)
@@ -549,7 +470,6 @@ namespace StageManager.Native
 					_lastDragEnd = DateTime.Now;
 
 					window.IsMouseMoving = false;
-					WindowMoved?.Invoke(window, EventArgs.Empty);
 				}
 			}
 		}

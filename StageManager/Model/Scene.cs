@@ -65,8 +65,6 @@ namespace StageManager.Model
 			}
 		}
 
-		public bool HasFocus => Windows.Any(w => w.IsFocused);
-
 		public string Key { get; }
 	}
 }
