@@ -117,12 +117,8 @@ namespace StageManager
 				WindowsManager.DesktopShortClick -= WindowsManager_DesktopShortClick;
 			}
 
-			WindowsManager.Stop();
-
-			// Determine which window should stay visible (e.g. the one that currently has focus)
+			// Restore opacity BEFORE WindowsManager.Stop() clears _windows.
 			var exemptHandle = _lastFocusedWindow?.Handle ?? Win32.GetForegroundWindow();
-
-			// Restore every known window (some might not be part of any scene anymore)
 			foreach (var w in WindowsManager?.Windows ?? Array.Empty<IWindow>())
 			{
 				WindowStrategy.Show(w);
@@ -132,7 +128,8 @@ namespace StageManager
 				}
 			}
 
-			// Restore icon visibility and remove layered style on shutdown
+			WindowsManager.Stop();
+
 			if (_hideDesktopIcons)
 				_desktop.RestoreIcons();
 		}
