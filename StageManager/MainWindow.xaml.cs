@@ -67,12 +67,12 @@ namespace StageManager
 		private readonly UpdateService _updateService = new();
 		private string? _filterProcessKey;
 
-		// Sidebar enter/exit morph (filter toggle). Asymmetric: incoming items decelerate into
-		// place (EaseOut), outgoing items accelerate away (EaseIn).
+		// Filter morph: enter decelerates (EaseOut), exit accelerates (EaseIn).
 		private static readonly Duration _filterMorphDuration = new Duration(TimeSpan.FromMilliseconds(250));
 		private static readonly IEasingFunction _filterEaseOut = new CubicEase { EasingMode = EasingMode.EaseOut };
 		private static readonly IEasingFunction _filterEaseIn = new CubicEase { EasingMode = EasingMode.EaseIn };
 		private readonly Dictionary<Guid, int> _filterAnimGen = new();
+		private int _filterIconGen;
 
 		public event PropertyChangedEventHandler PropertyChanged;
 
@@ -133,7 +133,6 @@ namespace StageManager
 				: "SWAP";
 			Log.Info("FILTER", $"ToggleAppFilter: action={action} prior='{prior ?? "<none>"}' new='{_filterProcessKey ?? "<none>"}'");
 
-			// AnimateSyncVisibility includes the icon refresh against final layout via snap-measure-revert.
 			AnimateSyncVisibility();
 		}
 
@@ -160,6 +159,10 @@ namespace StageManager
 				Log.Info("TRANSITION", $"Already on '{scene?.Title}', skipping");
 				return false;
 			}
+
+			// Cancel pending deferred icon refresh — scene-switch flips IsVisible on the
+			// destination, a late UpdateIcons would render an empty tile.
+			_filterIconGen++;
 
 			var sceneModel = AllScenes.FirstOrDefault(s => s?.Id == scene?.Id);
 			if (sceneModel == null)
@@ -781,12 +784,11 @@ namespace StageManager
 			Log.Info("FILTER", $"SyncVisibility: filter='{_filterProcessKey}' shown={shown} hidden={hidden} total={scenes.Length}");
 		}
 
-		// Animated equivalent of SyncVisibilityByUpdatedTimeStamp for filter-toggle paths.
-		// Computes the same target visibility set, then animates entering/exiting scenes via
-		// LayoutTransform.ScaleY + Opacity. Survivors aren't touched. Generation counter on
-		// the exit Completed handler guards against rapid filter swaps inverting the result.
-		private void AnimateSyncVisibility()
+		// Animated counterpart to SyncVisibilityByUpdatedTimeStamp for filter-toggle paths.
+		private async void AnimateSyncVisibility()
 		{
+			var iconGen = ++_filterIconGen;
+
 			var scenes = Scenes.OrderByDescending(s => s.Updated).ToArray();
 			bool[] target = new bool[scenes.Length];
 			if (_filterProcessKey == null)
@@ -799,148 +801,157 @@ namespace StageManager
 					target[i] = scenes[i].Windows.Any(w => w.Window?.ProcessFileName == _filterProcessKey);
 			}
 
-			// Snap-measure-revert: temporarily set final visibility, force layout, refresh icons
-			// against the final (post-animation) scene bounds, then revert. No render runs
-			// between these calls so the snap is invisible to the user.
-			//
-			// Critical: AnimateSceneExit uses FillBehavior.HoldEnd which keeps a previously-exited
-			// scene's LayoutTransform.ScaleY pinned at 0 (animated value overrides local). If we
-			// just flip IsVisible=true and call UpdateLayout, the layout pass measures those scenes
-			// at zero height and every visible scene's bounds collapse onto each other — icons
-			// cluster at one spot. So we detach in-flight ScaleY/Opacity animations and snap local
-			// values to identity (1, 0.8) for the measure, then restore the captured values for
-			// non-entering scenes so the upcoming RestoreSceneVisible/AnimateSceneExit can hand off
-			// from the actual mid-animation value without a visible jump. Entering scenes are left
-			// at local=1 because StartEnterAnimation uses From=0 + FillBehavior.Stop, which reverts
-			// to local at completion — that local must be 1 for the scene to stay visible.
+			// FLIP-First: capture each visible scene's container Y in window coords.
+			double[] oldY = new double[scenes.Length];
+			for (int i = 0; i < scenes.Length; i++)
+				oldY[i] = scenes[i].IsVisible ? GetSceneInnerY(scenes[i]) : double.NaN;
+
 			bool[] originalVisible = new bool[scenes.Length];
-			double[] capturedScaleY = new double[scenes.Length];
-			double[] capturedOpacity = new double[scenes.Length];
-			bool[] capturedAny = new bool[scenes.Length];
+			for (int i = 0; i < scenes.Length; i++) originalVisible[i] = scenes[i].IsVisible;
 
-			for (int i = 0; i < scenes.Length; i++)
-			{
-				originalVisible[i] = scenes[i].IsVisible;
-				scenes[i].IsVisible = target[i];
-
-				if (TryGetSceneInnerGrid(scenes[i]) is FrameworkElement inner)
-				{
-					if (inner.LayoutTransform is not ScaleTransform sc)
-					{
-						sc = new ScaleTransform(1, 1);
-						inner.LayoutTransform = sc;
-					}
-					capturedScaleY[i] = sc.ScaleY;
-					capturedOpacity[i] = inner.Opacity;
-					capturedAny[i] = true;
-
-					sc.BeginAnimation(ScaleTransform.ScaleYProperty, null);
-					inner.BeginAnimation(UIElement.OpacityProperty, null);
-					sc.ScaleY = 1;
-					inner.Opacity = 0.8;
-				}
-			}
-			UpdateLayout();
-			var visibleAtFinal = scenes.Where(s => s.IsVisible).ToList();
-			_iconOverlay.UpdateIcons(visibleAtFinal, s => GetSceneThumbnailScreenBounds(s), GetWorkAreaBounds());
-
-			for (int i = 0; i < scenes.Length; i++)
-			{
-				var entering = target[i] && !originalVisible[i];
-				scenes[i].IsVisible = originalVisible[i];
-				if (capturedAny[i] && !entering
-					&& TryGetSceneInnerGrid(scenes[i]) is FrameworkElement inner
-					&& inner.LayoutTransform is ScaleTransform sc)
-				{
-					sc.ScaleY = capturedScaleY[i];
-					inner.Opacity = capturedOpacity[i];
-				}
-			}
-			UpdateLayout();
-
+			// Phase order matters: enter (IsVisible=true) before survivor measurement so the
+			// FLIP From offset reflects post-enter layout.
+			var pendingExits = new List<TaskCompletionSource>();
 			int transitioning = 0;
 			for (int i = 0; i < scenes.Length; i++)
 			{
 				var s = scenes[i];
-				var want = target[i];
-				if (want && !s.IsVisible) { AnimateSceneEnter(s); transitioning++; }
-				else if (!want && s.IsVisible) { AnimateSceneExit(s); transitioning++; }
-				else if (want && s.IsVisible) RestoreSceneVisible(s);
-				// else (!want && !s.IsVisible): already hidden, no-op
+				if (target[i] && !originalVisible[i]) { AnimateSceneEnter(s); transitioning++; }
+			}
+			UpdateLayout();
+			for (int i = 0; i < scenes.Length; i++)
+			{
+				var s = scenes[i];
+				if (target[i] && originalVisible[i] && !double.IsNaN(oldY[i]))
+					RestoreSceneVisible(s, oldY[i]);
+			}
+			for (int i = 0; i < scenes.Length; i++)
+			{
+				var s = scenes[i];
+				if (!target[i] && originalVisible[i])
+				{
+					var tcs = new TaskCompletionSource();
+					pendingExits.Add(tcs);
+					AnimateSceneExit(s, tcs);
+					transitioning++;
+				}
 			}
 			Log.Info("FILTER", $"AnimateSyncVisibility: filter='{_filterProcessKey ?? "<none>"}' transitioning={transitioning}");
+
+			// Concurrent icon morph: kick off immediately so exiter icons fade out alongside their
+			// scene fade (SET) and enterer icons fade in alongside their scene appearance (CLEAR).
+			var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+			var visibleNow = scenes.Where((_, i) => target[i]).ToList();
+			_iconOverlay.UpdateIcons(visibleNow, s => GetSceneThumbnailScreenBounds(s), GetWorkAreaBounds());
+			Log.Info("FILTER_TIMING", $"first UpdateIcons at t={stopwatch.ElapsedMilliseconds}ms exits={pendingExits.Count} visibleNow={visibleNow.Count}");
+
+			if (pendingExits.Count == 0) return;
+
+			// SET path: layout doesn't collapse until exits complete; reposition survivor icons
+			// against final layout afterward. Safety timeout covers SnapshotAndReplace swallowing Completed.
+			var allExits = Task.WhenAll(pendingExits.Select(t => t.Task));
+			var safety = Task.Delay(_filterMorphDuration.TimeSpan + TimeSpan.FromMilliseconds(50));
+			await Task.WhenAny(allExits, safety);
+			Log.Info("FILTER_TIMING", $"exits completed at t={stopwatch.ElapsedMilliseconds}ms");
+			if (iconGen != _filterIconGen) return;
+			UpdateLayout();
+			var visibleAtFinal = Scenes.Where(s => s.IsVisible).ToList();
+			_iconOverlay.UpdateIcons(visibleAtFinal, s => GetSceneThumbnailScreenBounds(s), GetWorkAreaBounds());
+			Log.Info("FILTER_TIMING", $"second UpdateIcons at t={stopwatch.ElapsedMilliseconds}ms visibleFinal={visibleAtFinal.Count}");
 		}
 
 		private void AnimateSceneEnter(SceneModel s)
 		{
 			var gen = NextFilterGen(s.Id);
 			s.IsVisible = true;
-			// ItemContainer for non-virtualized StackPanel exists synchronously; if not, defer.
-			if (TryGetSceneInnerGrid(s) is FrameworkElement inner)
-				StartEnterAnimation(inner);
-			else
-				Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
-				{
-					if (CurrentFilterGen(s.Id) != gen) return;
-					if (TryGetSceneInnerGrid(s) is FrameworkElement inner2)
-						StartEnterAnimation(inner2);
-				});
+			if (TryGetSceneInnerGrid(s) is FrameworkElement inner) { StartEnterAnimation(inner); return; }
+			Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
+			{
+				if (CurrentFilterGen(s.Id) != gen) return;
+				if (TryGetSceneInnerGrid(s) is FrameworkElement inner2)
+					StartEnterAnimation(inner2);
+			});
 		}
 
-		private static void StartEnterAnimation(FrameworkElement inner)
-		{
-			var sc = inner.LayoutTransform as ScaleTransform;
-			if (sc == null) { sc = new ScaleTransform(1, 1); inner.LayoutTransform = sc; }
-			// Don't set sc.ScaleY=0 / inner.Opacity=0 as local values — FillBehavior.Stop would
-			// revert to them on completion and the scene would snap invisible. Instead, give the
-			// animation an explicit From=0 so the base values (ScaleY=1, Opacity=0.8 from Style)
-			// are what Stop falls back to, leaving the scene visible.
-			var scaleAnim = new DoubleAnimation(0, 1, _filterMorphDuration)
-			{
-				EasingFunction = _filterEaseOut,
-				FillBehavior = FillBehavior.Stop,
-			};
-			var opacityAnim = new DoubleAnimation(0, 0.8, _filterMorphDuration)
-			{
-				EasingFunction = _filterEaseOut,
-				FillBehavior = FillBehavior.Stop,
-			};
-			sc.BeginAnimation(ScaleTransform.ScaleYProperty, scaleAnim);
-			inner.BeginAnimation(UIElement.OpacityProperty, opacityAnim);
-		}
+		// From=0 explicit; FillBehavior.Stop reverts to style-base Opacity=0.8.
+		private static void StartEnterAnimation(FrameworkElement inner) =>
+			inner.BeginAnimation(UIElement.OpacityProperty,
+				new DoubleAnimation(0, 0.8, _filterMorphDuration) { EasingFunction = _filterEaseOut, FillBehavior = FillBehavior.Stop });
 
-		private void AnimateSceneExit(SceneModel s)
+		private void AnimateSceneExit(SceneModel s, TaskCompletionSource? tcs = null)
 		{
 			var gen = NextFilterGen(s.Id);
 			if (TryGetSceneInnerGrid(s) is not FrameworkElement inner)
 			{
 				s.IsVisible = false;
+				tcs?.TrySetResult();
 				return;
 			}
-			var sc = inner.LayoutTransform as ScaleTransform;
-			if (sc == null) { sc = new ScaleTransform(1, 1); inner.LayoutTransform = sc; }
-			var scaleAnim = MakeFilterAnim(0, FillBehavior.HoldEnd, _filterEaseIn);
-			scaleAnim.Completed += (_, _) =>
+			// HoldEnd keeps Opacity=0 painted until IsVisible flips — no flash before collapse.
+			var opacityAnim = MakeFilterAnim(0, FillBehavior.HoldEnd, _filterEaseIn);
+			opacityAnim.Completed += (_, _) =>
 			{
 				if (CurrentFilterGen(s.Id) == gen)
 					s.IsVisible = false;
+				tcs?.TrySetResult();
 			};
-			sc.BeginAnimation(ScaleTransform.ScaleYProperty, scaleAnim, HandoffBehavior.SnapshotAndReplace);
-			inner.BeginAnimation(UIElement.OpacityProperty, MakeFilterAnim(0, FillBehavior.HoldEnd, _filterEaseIn), HandoffBehavior.SnapshotAndReplace);
+			inner.BeginAnimation(UIElement.OpacityProperty, opacityAnim, HandoffBehavior.SnapshotAndReplace);
 		}
 
-		// Re-claim a "survivor" that may be mid-exit-animation (rapid filter toggle).
-		// Bumping gen invalidates the pending exit Completed handler; SnapshotAndReplace
-		// picks up from current animated value so there's no visual jump.
-		private void RestoreSceneVisible(SceneModel s)
+		// FLIP target = ContentPresenter, not inner Grid. The Grid carries the SceneOpacity
+		// style's ScaleTransform consumed by the hover storyboard — replacing its
+		// RenderTransform would break `(RenderTransform).(ScaleTransform.ScaleX)` resolution.
+		private void RestoreSceneVisible(SceneModel s, double oldYAbs = double.NaN)
 		{
 			NextFilterGen(s.Id);
 			if (TryGetSceneInnerGrid(s) is not FrameworkElement inner) return;
-			var sc = inner.LayoutTransform as ScaleTransform;
-			if (sc == null) return;
-			sc.BeginAnimation(ScaleTransform.ScaleYProperty, MakeFilterAnim(1, FillBehavior.Stop, _filterEaseOut), HandoffBehavior.SnapshotAndReplace);
 			inner.BeginAnimation(UIElement.OpacityProperty, MakeFilterAnim(0.8, FillBehavior.Stop, _filterEaseOut), HandoffBehavior.SnapshotAndReplace);
+
+			if (double.IsNaN(oldYAbs)) return;
+
+			var container = TryGetSceneItemContainer(s);
+			if (container is null) return;
+
+			double currentLayoutY = GetSceneInnerY(s);
+			if (double.IsNaN(currentLayoutY)) return;
+			double from = oldYAbs - currentLayoutY;
+
+			if (Math.Abs(from) > 0.5)
+			{
+				// Pre-seed local Y = from BEFORE BeginAnimation. Without this, render thread
+				// can paint one frame at the layout-only position (local Y=0 → visual at newY)
+				// before the animation clock ticks, causing a forward-back-forward visual dance.
+				// HoldEnd holds animated value at To=0 indefinitely so the seeded local doesn't
+				// resurface post-animation; SnapshotAndReplace keeps subsequent cycles clean.
+				if (container.RenderTransform is not TranslateTransform tt)
+				{
+					tt = new TranslateTransform { Y = from };
+					container.RenderTransform = tt;
+				}
+				else
+				{
+					tt.BeginAnimation(TranslateTransform.YProperty, null);
+					tt.Y = from;
+				}
+				var slide = new DoubleAnimation(from, 0, _filterMorphDuration)
+				{
+					EasingFunction = _filterEaseOut,
+					FillBehavior = FillBehavior.HoldEnd,
+				};
+				tt.BeginAnimation(TranslateTransform.YProperty, slide, HandoffBehavior.SnapshotAndReplace);
+			}
 		}
+
+		private double GetSceneInnerY(SceneModel s)
+		{
+			var container = TryGetSceneItemContainer(s);
+			if (container is null) return double.NaN;
+			try { return container.TransformToVisual(this).Transform(new Point(0, 0)).Y; }
+			catch { return double.NaN; }
+		}
+
+		private FrameworkElement? TryGetSceneItemContainer(SceneModel s)
+			=> scenesControl.ItemContainerGenerator.ContainerFromItem(s) as FrameworkElement;
 
 		private static DoubleAnimation MakeFilterAnim(double to, FillBehavior fill, IEasingFunction ease) =>
 			new DoubleAnimation(to, _filterMorphDuration) { EasingFunction = ease, FillBehavior = fill };
@@ -966,8 +977,7 @@ namespace StageManager
 		{
 			Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
 			{
-				// Force any pending sidebar layout (Remove+Insert during scene-selection change
-				// invalidates layout asynchronously) before sampling thumbnail bounds.
+				// Flush sidebar layout — Remove+Insert during selection invalidates async.
 				UpdateLayout();
 				var visible = Scenes.Where(s => s.IsVisible).ToList();
 				_iconOverlay.UpdateIcons(visible, s => GetSceneThumbnailScreenBounds(s), GetWorkAreaBounds(), xOffset);
