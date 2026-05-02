@@ -74,6 +74,13 @@ namespace StageManager
 		private readonly Dictionary<Guid, int> _filterAnimGen = new();
 		private int _filterIconGen;
 
+		// Grace window covering WindowsManager.MouseHook → DesktopShortClick latency (gated by
+		// the OS double-click time, typically ~500ms). SharpHook clears the filter at T=0 but
+		// the desktop toggle event fires later — predicate must report "filter was just cleared"
+		// during the gap to suppress the toggle.
+		private DateTime _filterClearedAt = DateTime.MinValue;
+		private static readonly TimeSpan _filterClearGrace = TimeSpan.FromMilliseconds(750);
+
 		public event PropertyChangedEventHandler PropertyChanged;
 
 		public bool EnableWindowDropToScene = false;
@@ -113,9 +120,15 @@ namespace StageManager
 
 			SwitchSceneCommand = new ActionCommand(async model =>
 			{
-				var sceneModel = (SceneModel)model;
+				// Scene clicks are inert during filter mode — filter view is modal and only
+				// dismisses via outside-click (handled in OnMousePressed). User keeps the
+				// currently-active scene; clicking a scene preview here does nothing.
 				if (_filterProcessKey != null)
-					ClearAppFilter();
+				{
+					Log.Info("FILTER", "Scene click suppressed during filter");
+					return;
+				}
+				var sceneModel = (SceneModel)model;
 				await AnimatedSwitchTo(sceneModel.Scene);
 			});
 
@@ -139,7 +152,8 @@ namespace StageManager
 		private void ClearAppFilter()
 		{
 			if (_filterProcessKey == null) return;
-			Log.Info("FILTER", $"ClearAppFilter: cleared filter='{_filterProcessKey}' (triggered by scene switch)");
+			Log.Info("FILTER", $"ClearAppFilter: cleared filter='{_filterProcessKey}'");
+			_filterClearedAt = DateTime.Now;
 			_filterProcessKey = null;
 			_iconOverlay.HighlightedProcessKey = null;
 			AnimateSyncVisibility();
@@ -273,6 +287,9 @@ namespace StageManager
 
 			var windowsManager = new WindowsManager();
 			SceneManager = new SceneManager(windowsManager, HideDesktopIcons);
+			SceneManager.IsAppFilterActive = () =>
+				_filterProcessKey != null
+				|| (DateTime.Now - _filterClearedAt) < _filterClearGrace;
 
 			// Ensure SceneManager.Start() is called on the main thread
 			if (Dispatcher.CheckAccess())
@@ -470,6 +487,18 @@ namespace StageManager
 
 		private void OnMousePressed(object? sender, MouseHookEventArgs e)
 		{
+			// Filter-clear gate runs before the foreground guard: outside-clicks (desktop, other apps)
+			// move foreground away from us, so the guard below would otherwise miss them.
+			if (_filterProcessKey != null)
+			{
+				var screenPoint = new Point(e.Data.X, e.Data.Y);
+				Dispatcher.Invoke(() =>
+				{
+					if (_filterProcessKey != null && !IsPointInsideAnyVisibleScene(screenPoint))
+						ClearAppFilter();
+				});
+			}
+
 			// if it's allowed to drag windows into scenes, we cannot hide the scenes
 			if (EnableWindowDropToScene)
 				_overlapCheckTimer.Change(TimeSpan.Zero, TimeSpan.Zero);
@@ -555,6 +584,19 @@ namespace StageManager
 
 			return model;
 		}
+
+		private bool IsPointInsideAnyVisibleScene(Point screenPoint)
+		{
+			foreach (var scene in Scenes)
+			{
+				if (!scene.IsVisible) continue;
+				var rect = GetSceneThumbnailScreenBounds(scene);
+				if (rect != Rect.Empty && rect.Contains(screenPoint))
+					return true;
+			}
+			return false;
+		}
+
 		#region WPF Sidebar Drag (Flow 2: sidebar → active)
 
 		private const double WpfDragThreshold = 10.0;

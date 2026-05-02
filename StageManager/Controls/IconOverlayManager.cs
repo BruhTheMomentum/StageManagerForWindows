@@ -47,7 +47,25 @@ namespace StageManager.Controls
         public bool Enabled { get; set; } = true;
 
         public Action<string>? OnIconClicked { get; set; }
-        public string? HighlightedProcessKey { get; set; }
+
+        // Setter side effect: while filter is active, freeze the icon strip — no hover, no click,
+        // no cursor change. IsHitTestVisible=false silences MouseEnter/Leave/LeftButtonUp and
+        // Cursors.Hand all at once. Also defeats the per-frame WS_EX_TRANSPARENT toggle in
+        // IconOverlayWindow.OnRenderTick (VisualTreeHelper.HitTest skips non-hit-testable elements),
+        // so clicks on the icon area fall through the overlay.
+        private string? _highlightedProcessKey;
+        public string? HighlightedProcessKey
+        {
+            get => _highlightedProcessKey;
+            set
+            {
+                if (_highlightedProcessKey == value) return;
+                _highlightedProcessKey = value;
+                var hitTestable = value == null;
+                foreach (var live in _icons.Values)
+                    live.Image.IsHitTestVisible = hitTestable;
+            }
+        }
 
         private sealed class LiveIcon
         {
@@ -221,6 +239,7 @@ namespace StageManager.Controls
                 Effect = SharedShadow,
                 Opacity = 0,  // always start invisible — first ApplyIconTarget call animates to target opacity
             };
+            image.IsHitTestVisible = HighlightedProcessKey == null;
 
             var sceneTitle = scene.Title;
             var windowTitle = scene.Windows[idx].Title;

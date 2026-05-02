@@ -284,10 +284,21 @@ namespace StageManager
 			// No scene switching here – handled by DesktopShortClick or other logic.
 		}
 
+		// MainWindow assigns this so SceneManager can ignore desktop-toggle clicks while the
+		// app-filter is active — those clicks are reserved for clearing the filter (handled in
+		// MainWindow.OnMousePressed).
+		public Func<bool>? IsAppFilterActive { get; set; }
+
 		private void WindowsManager_DesktopShortClick(object? sender, IntPtr handle)
 		{
 			if (_suspend)
 				return;
+
+			if (IsAppFilterActive?.Invoke() == true)
+			{
+				Log.Info("DESKTOP", "Click during app-filter — desktop toggle suppressed");
+				return;
+			}
 
 			// Only treat clicks on truly blank desktop areas as a toggle trigger
 			if (!IsBlankDesktopClick(handle))
