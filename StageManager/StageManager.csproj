@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk" InitialTargets="SetVersionFromGitTag">
 
 	<PropertyGroup>
 		<OutputType>WinExe</OutputType>
@@ -7,8 +7,18 @@
 		<UseWPF>true</UseWPF>
 		<UseWindowsForms>true</UseWindowsForms>
 		<ApplicationIcon>StageManager.ico</ApplicationIcon>
-		<Version>0.8.0</Version>
 	</PropertyGroup>
+
+	<Target Name="SetVersionFromGitTag" Condition="'$(Version)' == '' Or '$(Version)' == '1.0.0'">
+		<Exec Command="git describe --tags --abbrev=0" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardOutputImportance="low" EchoOff="true" WorkingDirectory="$(MSBuildProjectDirectory)">
+			<Output TaskParameter="ConsoleOutput" PropertyName="_GitTag" />
+			<Output TaskParameter="ExitCode" PropertyName="_GitExit" />
+		</Exec>
+		<PropertyGroup>
+			<Version Condition="'$(_GitExit)' == '0' And '$(_GitTag)' != ''">$(_GitTag.TrimStart('v'))</Version>
+			<VersionPrefix Condition="'$(_GitExit)' == '0' And '$(_GitTag)' != ''">$(_GitTag.TrimStart('v'))</VersionPrefix>
+		</PropertyGroup>
+	</Target>
 
 	<ItemGroup>
 		<Resource Include="StageManager.ico" />
