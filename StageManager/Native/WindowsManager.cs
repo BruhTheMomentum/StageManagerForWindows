@@ -25,17 +25,19 @@ namespace StageManager.Native
 		private readonly object _mouseMoveLock = new object();
 		private Win32.HookProc _mouseHook;
 		private readonly HashSet<IntPtr> _startupMinimizedHandles = new();
+		private readonly List<IntPtr> _winEventHooks = new();
+		private IntPtr _mouseHookHandle;
 
 		private IntPtr _currentProcessWindowHandle;
 		private int _currentProcessId;
-		private DateTime _lastLeftButtonDown;
+		private long _lastLeftButtonDown;
 		// Double-click handling to suppress scene toggle when user double-clicks a desktop item
 		private readonly int _doubleClickTime; // system double-click time in ms
 		private bool _desktopClickPending;
-		private DateTime _desktopClickTime;
+		private long _desktopClickTime;
 		private IntPtr _desktopClickHandle;
 		private readonly object _desktopClickLock = new object();
-		private DateTime _lastDragEnd = DateTime.MinValue;
+		private long _lastDragEnd = 0L;
 		/// <summary>
 		/// Raised after a completed < 250 ms left-button click when the desktop (WorkerW/Progman) is the foreground window.
 		/// The <see cref="IntPtr"/> argument is the handle of the desktop window that had focus.
@@ -103,12 +105,13 @@ namespace StageManager.Native
 				return true;
 			}, IntPtr.Zero);
 
-			Win32.SetWinEventHook(Win32.EVENT_CONSTANTS.EVENT_OBJECT_DESTROY, Win32.EVENT_CONSTANTS.EVENT_OBJECT_SHOW, IntPtr.Zero, _hookDelegate, 0, 0, 0);
-			Win32.SetWinEventHook(Win32.EVENT_CONSTANTS.EVENT_OBJECT_CLOAKED, Win32.EVENT_CONSTANTS.EVENT_OBJECT_UNCLOAKED, IntPtr.Zero, _hookDelegate, 0, 0, 0);
-			Win32.SetWinEventHook(Win32.EVENT_CONSTANTS.EVENT_SYSTEM_MINIMIZESTART, Win32.EVENT_CONSTANTS.EVENT_SYSTEM_MINIMIZEEND, IntPtr.Zero, _hookDelegate, 0, 0, 0);
-			Win32.SetWinEventHook(Win32.EVENT_CONSTANTS.EVENT_SYSTEM_MOVESIZESTART, Win32.EVENT_CONSTANTS.EVENT_SYSTEM_MOVESIZEEND, IntPtr.Zero, _hookDelegate, 0, 0, 0);
-			Win32.SetWinEventHook(Win32.EVENT_CONSTANTS.EVENT_SYSTEM_FOREGROUND, Win32.EVENT_CONSTANTS.EVENT_SYSTEM_FOREGROUND, IntPtr.Zero, _hookDelegate, 0, 0, 0);
-			Win32.SetWinEventHook(Win32.EVENT_CONSTANTS.EVENT_OBJECT_LOCATIONCHANGE, Win32.EVENT_CONSTANTS.EVENT_OBJECT_LOCATIONCHANGE, IntPtr.Zero, _hookDelegate, 0, 0, 0);
+			_winEventHooks.Add(Win32.SetWinEventHook(Win32.EVENT_CONSTANTS.EVENT_OBJECT_DESTROY, Win32.EVENT_CONSTANTS.EVENT_OBJECT_SHOW, IntPtr.Zero, _hookDelegate, 0, 0, 0));
+			_winEventHooks.Add(Win32.SetWinEventHook(Win32.EVENT_CONSTANTS.EVENT_OBJECT_CLOAKED, Win32.EVENT_CONSTANTS.EVENT_OBJECT_UNCLOAKED, IntPtr.Zero, _hookDelegate, 0, 0, 0));
+			_winEventHooks.Add(Win32.SetWinEventHook(Win32.EVENT_CONSTANTS.EVENT_SYSTEM_MINIMIZESTART, Win32.EVENT_CONSTANTS.EVENT_SYSTEM_MINIMIZEEND, IntPtr.Zero, _hookDelegate, 0, 0, 0));
+			_winEventHooks.Add(Win32.SetWinEventHook(Win32.EVENT_CONSTANTS.EVENT_SYSTEM_MOVESIZESTART, Win32.EVENT_CONSTANTS.EVENT_SYSTEM_MOVESIZEEND, IntPtr.Zero, _hookDelegate, 0, 0, 0));
+			_winEventHooks.Add(Win32.SetWinEventHook(Win32.EVENT_CONSTANTS.EVENT_SYSTEM_FOREGROUND, Win32.EVENT_CONSTANTS.EVENT_SYSTEM_FOREGROUND, IntPtr.Zero, _hookDelegate, 0, 0, 0));
+			_winEventHooks.Add(Win32.SetWinEventHook(Win32.EVENT_CONSTANTS.EVENT_OBJECT_LOCATIONCHANGE, Win32.EVENT_CONSTANTS.EVENT_OBJECT_LOCATIONCHANGE, IntPtr.Zero, _hookDelegate, 0, 0, 0));
+			_winEventHooks.Add(Win32.SetWinEventHook(Win32.EVENT_CONSTANTS.EVENT_OBJECT_NAMECHANGE, Win32.EVENT_CONSTANTS.EVENT_OBJECT_NAMECHANGE, IntPtr.Zero, _hookDelegate, 0, 0, 0));
 
 			_mouseHook = MouseHook;
 
@@ -116,7 +119,7 @@ namespace StageManager.Native
 			{
 				try
 				{
-					Win32.SetWindowsHookEx(Win32.WH_MOUSE_LL, _mouseHook, currentProcess.MainModule.BaseAddress, 0);
+					_mouseHookHandle = Win32.SetWindowsHookEx(Win32.WH_MOUSE_LL, _mouseHook, currentProcess.MainModule.BaseAddress, 0);
 					Application.Run();
 				}
 				catch (Exception ex)
@@ -136,6 +139,22 @@ namespace StageManager.Native
 		public void Stop()
 		{
 			_active = false;
+
+			foreach (var hook in _winEventHooks)
+			{
+				if (hook != IntPtr.Zero)
+				{
+					try { Win32.UnhookWinEvent(hook); } catch { /* best-effort during shutdown */ }
+				}
+			}
+			_winEventHooks.Clear();
+
+			if (_mouseHookHandle != IntPtr.Zero)
+			{
+				try { Win32.UnhookWindowsHookEx(_mouseHookHandle); } catch { /* best-effort during shutdown */ }
+				_mouseHookHandle = IntPtr.Zero;
+			}
+
 			Application.Exit();
 
 			// Restore startup-minimized windows to their original minimized state so the user
@@ -206,13 +225,13 @@ namespace StageManager.Native
 					// double-click interval, treat it as a double-click and cancel the pending action.
 					lock (_desktopClickLock)
 					{
-						if (_desktopClickPending && (DateTime.Now - _desktopClickTime).TotalMilliseconds <= _doubleClickTime)
+						if (_desktopClickPending && (Environment.TickCount64 - _desktopClickTime) <= _doubleClickTime)
 						{
 							_desktopClickPending = false; // cancel pending single click
 						}
 					}
 
-					_lastLeftButtonDown = DateTime.Now;
+					_lastLeftButtonDown = Environment.TickCount64;
 				}
 				else if (msg == Win32.WM_LBUTTONUP)
 				{
@@ -226,12 +245,12 @@ namespace StageManager.Native
 						if (DesktopShellClassifier.IsDesktopShell(windowUnderCursor))
 						{
 							// Suppress false desktop clicks from drag-drop mouse-up landing on desktop behind sidebar
-							if ((DateTime.Now - _lastDragEnd).TotalMilliseconds < 300)
+							if ((Environment.TickCount64 - _lastDragEnd) < 300)
 							{ /* drag just ended — skip desktop click */ }
 							else lock (_desktopClickLock)
 							{
 								_desktopClickPending = true;
-								_desktopClickTime = DateTime.Now;
+								_desktopClickTime = Environment.TickCount64;
 								_desktopClickHandle = windowUnderCursor;
 							}
 
@@ -240,7 +259,7 @@ namespace StageManager.Native
 								await Task.Delay(_doubleClickTime);
 								lock (_desktopClickLock)
 								{
-									if (_desktopClickPending && (DateTime.Now - _desktopClickTime).TotalMilliseconds >= _doubleClickTime)
+									if (_desktopClickPending && (Environment.TickCount64 - _desktopClickTime) >= _doubleClickTime)
 									{
 										DesktopShortClick?.Invoke(this, _desktopClickHandle);
 									}
@@ -293,6 +312,17 @@ namespace StageManager.Native
 						break;
 					case Win32.EVENT_CONSTANTS.EVENT_OBJECT_LOCATIONCHANGE:
 						WindowMove(hwnd);
+						break;
+					case Win32.EVENT_CONSTANTS.EVENT_OBJECT_NAMECHANGE:
+						if (_windows.TryGetValue(hwnd, out var compact) &&
+							string.Equals(compact.ProcessFileName, "ms-teams.exe", StringComparison.OrdinalIgnoreCase) &&
+							compact.Title.StartsWith("Meeting compact view", StringComparison.OrdinalIgnoreCase))
+						{
+							var ex = Win32.GetWindowExStyleLongPtr(hwnd);
+							Win32.SetWindowStyleExLongPtr(hwnd, ex & ~Win32.WS_EX.WS_EX_TRANSPARENT);
+							Win32Helper.SetAlpha(hwnd, 255);
+							UnregisterWindow(hwnd);
+						}
 						break;
 				}
 			}
@@ -450,7 +480,7 @@ namespace StageManager.Native
 
 		public void SuppressNextDesktopClick()
 		{
-			_lastDragEnd = DateTime.Now;
+			_lastDragEnd = Environment.TickCount64;
 		}
 
 		private void HandleWindowMoveEnd()
@@ -464,7 +494,7 @@ namespace StageManager.Native
 				{
 					var window = _mouseMoveWindow;
 					_mouseMoveWindow = null;
-					_lastDragEnd = DateTime.Now;
+					_lastDragEnd = Environment.TickCount64;
 
 					window.IsMouseMoving = false;
 				}

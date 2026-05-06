@@ -6,19 +6,22 @@ using System.Collections.Generic;
 namespace StageManager.Strategies
 {
 	/// <summary>
-	/// Works well with opacity = 0, higher opacity will make the windows appear when clicked
-	/// Visual Studio cannot be hidden this way, might be the same with other windows
+	/// Hides windows by setting alpha=0 so DWM keeps compositing them (live thumbnails stay live).
+	/// Some apps (Visual Studio, certain GPU-composited UIs) reject SetLayeredWindowAttributes —
+	/// for those we fall back to moving the window off-screen, keyed off the bool return of the alpha set.
 	/// </summary>
 	internal class OpacityWindowStrategy : IWindowStrategy
 	{
 		// Remember previous styles so we can restore them when showing again.
 		private static readonly Dictionary<IntPtr, Win32.WS_EX> _originalStyles = new();
-		// Remember original on-screen position when we had to move the window off-screen
+		// Original on-screen position for windows we had to move off-screen (alpha-reject fallback).
 		private static readonly Dictionary<IntPtr, (int X, int Y)> _originalPositions = new();
 
 		// Atomic state management
 		private static readonly System.Collections.Concurrent.ConcurrentDictionary<IntPtr, System.Threading.SemaphoreSlim> _windowLocks = new();
 		private static readonly object _globalLock = new object();
+
+		private const int OFFSCREEN_OFFSET = 4000;
 
 		/// <summary>
 		/// Cleans up all per-window state (locks, saved styles, saved positions) when a window is destroyed.
@@ -102,7 +105,7 @@ namespace StageManager.Strategies
 					}
 				}
 
-				// Restore original on-screen position if we moved it off-screen (atomically)
+				// Restore original on-screen position if we moved it off-screen (alpha-reject fallback)
 				lock (_globalLock)
 				{
 					if (_originalPositions.TryGetValue(hWnd, out var pos))
@@ -173,20 +176,19 @@ namespace StageManager.Strategies
 
 				// Instantly hide window by setting alpha to 0 (no fade) so there is no brief overlap
 				Log.Window("OPACITY", "Instant hide alpha→0", window);
-				Win32.SetLayeredWindowAttributes(hWnd, 0, 0, Win32.LWA_ALPHA);
+				var alphaApplied = Win32.SetLayeredWindowAttributes(hWnd, 0, 0, Win32.LWA_ALPHA);
 
 				// Keep mouse-through flag enabled so clicks pass to visible windows underneath
 				// Window remains present for live thumbnails.
 
-				// If layered transparency fails, fall back to moving window off-screen handled below.
-
-				// Additional fallback: move window off-screen when transparency is not supported
-				if (!_supportsLayeredTransparency(hWnd))
+				// Fallback: some apps (e.g. Visual Studio) reject layered alpha. Move them off-screen
+				// so the user can't see them. Thumbnails for these will be live but show the off-screen content,
+				// which DWM keeps compositing.
+				if (!alphaApplied)
 				{
-					Log.Window("OPACITY", "Transparency not supported, falling back to off-screen move", window);
+					Log.Window("OPACITY", "Layered alpha rejected, moving off-screen", window);
 					try
 					{
-						// Store original position only once (atomically)
 						lock (_globalLock)
 						{
 							if (!_originalPositions.ContainsKey(hWnd))
@@ -197,25 +199,18 @@ namespace StageManager.Strategies
 							}
 						}
 
-						const int OFFSCREEN_OFFSET = 4000; // beyond typical virtual screen bounds
 						Win32.SetWindowPos(hWnd, IntPtr.Zero,
 							OFFSCREEN_OFFSET, OFFSCREEN_OFFSET, 0, 0,
 							Win32.SetWindowPosFlags.IgnoreResize |
 							Win32.SetWindowPosFlags.DoNotActivate);
 					}
-					catch { /* ignored */ }
+					catch { /* best-effort */ }
 				}
 			}
 			finally
 			{
 				lockSem.Release();
 			}
-		}
-
-		private static bool _supportsLayeredTransparency(IntPtr hWnd)
-		{
-			// Simple probe – attempt to set alpha 1 and check success
-			return Win32.SetLayeredWindowAttributes(hWnd, 0, 1, Win32.LWA_ALPHA);
 		}
 	}
 }

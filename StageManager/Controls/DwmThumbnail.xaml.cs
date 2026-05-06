@@ -107,15 +107,21 @@ namespace StageManager.Controls
 
 		private void UpdateThumbnailProperties()
 		{
-			if (_dwmThumbnail == IntPtr.Zero)
+			if (_dwmThumbnail == IntPtr.Zero || !IsConnectedToVisualTree())
 				return;
 
 			ApplyRect(ComputeDestinationRect());
 		}
 
+		private bool IsConnectedToVisualTree()
+		{
+			var window = FindWindow();
+			return window != null && window.IsAncestorOf(this);
+		}
+
 		private void OnRenderingTick(object? sender, EventArgs e)
 		{
-			if (_dwmThumbnail == IntPtr.Zero || !IsVisible)
+			if (_dwmThumbnail == IntPtr.Zero || !IsVisible || !IsConnectedToVisualTree())
 				return;
 
 			var rect = ComputeDestinationRect();

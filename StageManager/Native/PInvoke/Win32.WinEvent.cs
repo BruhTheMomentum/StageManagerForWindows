@@ -84,5 +84,8 @@ namespace StageManager.Native.PInvoke
 
         [DllImport("user32.dll")]
         public static extern IntPtr SetWinEventHook(Win32.EVENT_CONSTANTS eventMin, Win32.EVENT_CONSTANTS eventMax, IntPtr hmodWinEventProc, WinEventDelegate lpfnWinEventProc, uint idProcess, uint idThread, uint dwFlags);
+
+        [DllImport("user32.dll")]
+        public static extern bool UnhookWinEvent(IntPtr hWinEventHook);
     }
 }

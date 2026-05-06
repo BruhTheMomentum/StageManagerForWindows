@@ -34,6 +34,9 @@ namespace StageManager.Native.PInvoke
         public static extern IntPtr SetWindowsHookEx(int hookType, [MarshalAs(UnmanagedType.FunctionPtr)] HookProc lpfn, IntPtr hMod, int dwThreadId);
 
         [DllImport("user32.dll")]
+        public static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+        [DllImport("user32.dll")]
         public static extern IntPtr CallNextHookEx([Optional] IntPtr hhk, int nCode, UIntPtr wParam, IntPtr lParam);
 
         [DllImport("user32.dll")]

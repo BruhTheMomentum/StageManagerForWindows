@@ -353,28 +353,37 @@ namespace StageManager.Controls
             _overlay?.Hide();
         }
 
+        // Reuse one TranslateTransform across slides. Replacing the transform per call orphaned the
+        // prior animation: it kept ticking and its Completed handler (Hide() for SlideOut) fired
+        // mid-SlideIn, hiding the overlay until the next scene switch. SnapshotAndReplace on the
+        // SAME transform's same property atomically cancels the prior animation, suppressing its
+        // Completed event. Overlay window stays visible through transitions to avoid native-window
+        // show-bootstrap flicker — content is translated off-screen instead.
         public void SlideIn(double offsetX, TimeSpan duration, IEasingFunction easing, Action? onCompleted = null)
         {
             if (_overlay == null) return;
-            var transform = new TranslateTransform(offsetX, 0);
-            _overlay.Canvas.RenderTransform = transform;
+            _overlay.Show();
+            var transform = GetCanvasSlideTransform();
             var anim = Anim.From(offsetX, 0, new Duration(duration), easing);
-            anim.Completed += (_, _) =>
-            {
-                _overlay.Canvas.RenderTransform = Transform.Identity;
-                onCompleted?.Invoke();
-            };
-            transform.BeginAnimation(TranslateTransform.XProperty, anim);
+            anim.Completed += (_, _) => onCompleted?.Invoke();
+            transform.BeginAnimation(TranslateTransform.XProperty, anim, HandoffBehavior.SnapshotAndReplace);
         }
 
         public void SlideOut(double offsetX, TimeSpan duration, IEasingFunction easing)
         {
             if (_overlay == null) return;
-            var transform = _overlay.Canvas.RenderTransform as TranslateTransform ?? new TranslateTransform();
-            _overlay.Canvas.RenderTransform = transform;
+            var transform = GetCanvasSlideTransform();
             var anim = Anim.From(0, offsetX, new Duration(duration), easing);
-            anim.Completed += (_, _) => Hide();
-            transform.BeginAnimation(TranslateTransform.XProperty, anim);
+            transform.BeginAnimation(TranslateTransform.XProperty, anim, HandoffBehavior.SnapshotAndReplace);
+        }
+
+        private TranslateTransform GetCanvasSlideTransform()
+        {
+            if (_overlay!.Canvas.RenderTransform is TranslateTransform existing)
+                return existing;
+            var transform = new TranslateTransform();
+            _overlay.Canvas.RenderTransform = transform;
+            return transform;
         }
 
         public void Dispose()
