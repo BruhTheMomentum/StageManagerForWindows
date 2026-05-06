@@ -174,7 +174,8 @@
             Visibility="Visible"
             ToolTipText="Stage Manager"
             IconSource="StageManager.ico"
-            MenuActivation="LeftOrRightClick">
+            MenuActivation="LeftOrRightClick"
+            NoLeftClickDelay="True">
             <tb:TaskbarIcon.ContextMenu>
                 <ContextMenu
                     Style="{StaticResource TrayContextMenuStyle}"

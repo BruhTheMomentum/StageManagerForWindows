@@ -36,6 +36,7 @@ namespace StageManager
 		private const string APP_NAME = "StageManager";
 		private IntPtr _thisHandle;
 		private TaskPoolGlobalHook _hook;
+		private volatile bool _trayMenuOpen;
 		private WindowMode _mode;
 		private double _lastWidth;
 		private Timer _overlapCheckTimer;
@@ -507,6 +508,9 @@ namespace StageManager
 
 		private void OnMousePressed(object? sender, MouseHookEventArgs e)
 		{
+			if (_trayMenuOpen)
+				return;
+
 			// Filter-clear gate runs before the foreground guard: outside-clicks (desktop, other apps)
 			// move foreground away from us, so the guard below would otherwise miss them.
 			if (_filterProcessKey != null)
@@ -535,6 +539,9 @@ namespace StageManager
 
 		private void OnMouseReleased(object? sender, MouseHookEventArgs e)
 		{
+			if (_trayMenuOpen)
+				return;
+
 			if (EnableWindowPullToScene)
 			{
 				// WPF drag is handled by ScenesControl_PreviewMouseLeftButtonUp — only legacy pull remains
@@ -1371,6 +1378,11 @@ namespace StageManager
 				if (update is null)
 				{
 					SetUpdateState(UpdateState.UpToDate);
+					_ = Task.Delay(3000).ContinueWith(_ =>
+					{
+						if (_updateState == UpdateState.UpToDate)
+							SetUpdateState(UpdateState.Idle);
+					}, TaskScheduler.FromCurrentSynchronizationContext());
 				}
 				else
 				{
@@ -1432,12 +1444,12 @@ namespace StageManager
 
 		private void ContextMenu_Closed(object sender, RoutedEventArgs e)
 		{
-			StartHook();
+			_trayMenuOpen = false;
 		}
 
 		private void ContextMenu_Opened(object sender, RoutedEventArgs e)
 		{
-			StopHook();
+			_trayMenuOpen = true;
 		}
 	}
 
